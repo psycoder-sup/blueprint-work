@@ -1,12 +1,12 @@
 ---
 id: TK-0103
 title: "Implement Epic CRUD Tools"
-status: TODO
+status: DONE
 epic: 1
 priority: medium
 dependencies: [TK-0101]
 blockers: []
-commits: []
+commits: [79634b3, d61ab7e]
 pr: ""
 ---
 
