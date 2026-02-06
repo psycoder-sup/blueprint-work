@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "blueprint": {
+      "command": "cargo",
+      "args": ["run", "--", "serve"],
+      "cwd": "/Users/sanguk/00_Code/00_Personal/blueprint-work"
+    }
+  }
+}

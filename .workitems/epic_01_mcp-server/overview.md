@@ -26,7 +26,7 @@ Implement the stdio-based MCP (Model Context Protocol) server. This is the core 
 |---|------|--------|
 | 00 | Implement stdio JSON-RPC transport | done |
 | 01 | Implement MCP protocol handshake | done |
-| 02 | Implement Project CRUD tools (5 tools) | todo |
+| 02 | Implement Project CRUD tools (5 tools) | done |
 | 03 | Implement Epic CRUD tools (5 tools) | todo |
 | 04 | Implement BlueTask CRUD tools (5 tools) | todo |
 | 05 | Implement dependency tools (add/remove) | todo |

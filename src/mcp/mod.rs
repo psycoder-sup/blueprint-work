@@ -243,11 +243,12 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"create_project","arguments":{"name":"test","description":"desc"}}}"#;
         let resp = server.process_message(line).unwrap();
         let result = resp.result.unwrap();
-        assert_eq!(result["isError"], true);
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("create_project"));
+        assert!(result.get("isError").is_none(), "create_project should succeed");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let project: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(project["name"], "test");
+        assert_eq!(project["description"], "desc");
+        assert_eq!(project["id"].as_str().unwrap().len(), 26);
     }
 
     #[test]
