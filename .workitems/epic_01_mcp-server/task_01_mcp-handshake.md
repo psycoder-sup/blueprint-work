@@ -1,7 +1,7 @@
 ---
 id: TK-0101
 title: "Implement MCP Protocol Handshake"
-status: TODO
+status: DONE
 epic: 1
 priority: medium
 dependencies: [TK-0100]

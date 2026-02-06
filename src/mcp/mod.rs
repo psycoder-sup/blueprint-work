@@ -1,11 +1,12 @@
+pub mod tools;
 pub mod types;
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::db::Database;
-use types::{JsonRpcRequest, JsonRpcResponse, JSONRPC_VERSION};
+use types::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, JSONRPC_VERSION};
 
 pub struct McpServer {
     db: Database,
@@ -81,18 +82,68 @@ impl McpServer {
     }
 
     fn handle_notification(&self, request: &JsonRpcRequest) {
-        eprintln!("Received notification: {}", request.method);
+        match request.method.as_str() {
+            "notifications/initialized" => eprintln!("Client initialized"),
+            _ => eprintln!("Received notification: {}", request.method),
+        }
     }
 
     fn handle_request(&self, request: &JsonRpcRequest, id: Value) -> Option<JsonRpcResponse> {
-        let _ = &self.db; // suppress unused warning until handlers are added
-        Some(JsonRpcResponse::method_not_found(id, &request.method))
+        match request.method.as_str() {
+            "initialize" => Some(self.handle_initialize(id)),
+            "ping" => Some(JsonRpcResponse::success(id, json!({}))),
+            "tools/list" => Some(self.handle_tools_list(id)),
+            "tools/call" => Some(self.handle_tools_call(request, id)),
+            _ => Some(JsonRpcResponse::method_not_found(id, &request.method)),
+        }
+    }
+
+    fn handle_initialize(&self, id: Value) -> JsonRpcResponse {
+        JsonRpcResponse::success(
+            id,
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "tools": { "listChanged": false }
+                },
+                "serverInfo": {
+                    "name": "blueprint",
+                    "version": "0.1.0"
+                }
+            }),
+        )
+    }
+
+    fn handle_tools_list(&self, id: Value) -> JsonRpcResponse {
+        JsonRpcResponse::success(id, json!({ "tools": tools::tool_definitions() }))
+    }
+
+    fn handle_tools_call(&self, request: &JsonRpcRequest, id: Value) -> JsonRpcResponse {
+        let Some(params) = &request.params else {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params");
+        };
+
+        let Some(name) = params.get("name").and_then(|n| n.as_str()) else {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing tool name");
+        };
+
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+
+        match tools::dispatch_tool(name, &args, &self.db) {
+            Some(result) => JsonRpcResponse::success(id, result),
+            None => JsonRpcResponse::error(
+                id,
+                INVALID_PARAMS,
+                format!("Unknown tool: {name}"),
+            ),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::TempDir;
 
     fn test_server() -> (McpServer, TempDir) {
@@ -154,5 +205,74 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, types::INVALID_REQUEST);
         assert!(err.message.contains("string or number"));
+    }
+
+    #[test]
+    fn test_initialize_returns_server_info() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
+        let resp = server.process_message(line).unwrap();
+        let result = resp.result.unwrap();
+        assert_eq!(result["protocolVersion"], "2025-06-18");
+        assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        assert_eq!(result["serverInfo"]["name"], "blueprint");
+        assert_eq!(result["serverInfo"]["version"], "0.1.0");
+    }
+
+    #[test]
+    fn test_ping_returns_empty_object() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"ping","id":1}"#;
+        let resp = server.process_message(line).unwrap();
+        assert_eq!(resp.result.unwrap(), json!({}));
+    }
+
+    #[test]
+    fn test_tools_list_returns_19_tools() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#;
+        let resp = server.process_message(line).unwrap();
+        let result = resp.result.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 19);
+    }
+
+    #[test]
+    fn test_tools_call_known_tool() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"create_project","arguments":{"name":"test","description":"desc"}}}"#;
+        let resp = server.process_message(line).unwrap();
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("create_project"));
+    }
+
+    #[test]
+    fn test_tools_call_unknown_tool() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"nonexistent"}}"#;
+        let resp = server.process_message(line).unwrap();
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(err.message.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_tools_call_missing_params() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"tools/call","id":1}"#;
+        let resp = server.process_message(line).unwrap();
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    fn test_initialized_notification() {
+        let (server, _dir) = test_server();
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        assert!(server.process_message(line).is_none());
     }
 }

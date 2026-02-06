@@ -7,7 +7,6 @@ pub const JSONRPC_VERSION: &str = "2.0";
 pub const PARSE_ERROR: i64 = -32700;
 pub const INVALID_REQUEST: i64 = -32600;
 pub const METHOD_NOT_FOUND: i64 = -32601;
-#[allow(dead_code)]
 pub const INVALID_PARAMS: i64 = -32602;
 #[allow(dead_code)]
 pub const INTERNAL_ERROR: i64 = -32603;
