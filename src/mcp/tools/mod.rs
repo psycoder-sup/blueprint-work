@@ -1,5 +1,6 @@
 mod epic;
 mod project;
+mod task;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -290,6 +291,11 @@ pub fn dispatch_tool(name: &str, args: &Value, db: &Database) -> Option<Value> {
         "get_epic" => epic::handle_get_epic(args, db),
         "update_epic" => epic::handle_update_epic(args, db),
         "delete_epic" => epic::handle_delete_epic(args, db),
+        "create_task" => task::handle_create_task(args, db),
+        "list_tasks" => task::handle_list_tasks(args, db),
+        "get_task" => task::handle_get_task(args, db),
+        "update_task" => task::handle_update_task(args, db),
+        "delete_task" => task::handle_delete_task(args, db),
         _ => {
             let is_known = tool_definitions()
                 .iter()
@@ -346,14 +352,14 @@ mod tests {
     #[test]
     fn test_dispatch_known_tool_returns_stub() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("create_task", &json!({}), &db);
+        let result = dispatch_tool("add_dependency", &json!({}), &db);
         assert!(result.is_some());
         let val = result.unwrap();
         assert_eq!(val["isError"], true);
         assert!(val["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("create_task"));
+            .contains("add_dependency"));
     }
 
     #[test]

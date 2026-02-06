@@ -16,6 +16,13 @@ This project uses a `.workitems/` directory to track all implementation work as 
 3. **Complete a task:** Verify all acceptance criteria, set `status: DONE`, add commit SHAs to `commits`, and update the epic's task table.
 4. **Create new tasks:** Copy `_template.md`, follow the naming convention (`task_{NN}_{kebab-slug}.md`), and add it to the epic's overview.
 
+### Plan Requirements
+
+When creating a plan for a TK task, **always** include these steps explicitly:
+
+1. **First step of the plan:** Set the task file's `status: IN-PROGRESS` in YAML frontmatter.
+2. **Last steps of the plan:** Set `status: DONE`, add commit SHAs to `commits`, and update the epic's `overview.md` task table.
+
 ### Key Rules
 
 - Task IDs follow `TK-{epicNN}{taskNN}` format (e.g., `TK-0100` = epic 01, task 00).
