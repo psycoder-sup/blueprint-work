@@ -31,7 +31,7 @@ None — this is the root epic.
 | 01 | Create SQLite schema & migration system | done |
 | 02 | Implement Project model & CRUD | done |
 | 03 | Implement Epic model & CRUD | done |
-| 04 | Implement BlueTask model & CRUD | todo |
+| 04 | Implement BlueTask model & CRUD | done |
 | 05 | Implement Dependency management | todo |
 
 ## Acceptance Criteria

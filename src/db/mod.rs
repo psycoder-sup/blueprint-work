@@ -60,6 +60,7 @@ impl Database {
 
 pub mod epic;
 pub mod project;
+pub mod task;
 
 #[cfg(test)]
 mod tests {

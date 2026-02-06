@@ -1,7 +1,7 @@
 ---
 id: TK-0004
 title: "Implement BlueTask Model & CRUD"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: [TK-0003]
