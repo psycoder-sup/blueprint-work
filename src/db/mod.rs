@@ -61,6 +61,7 @@ impl Database {
 pub mod dependency;
 pub mod epic;
 pub mod project;
+pub mod status;
 pub mod task;
 
 #[cfg(test)]

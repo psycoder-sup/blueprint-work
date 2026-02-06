@@ -1,7 +1,7 @@
 ---
 id: TK-0106
 title: "Implement get_status Tool"
-status: TODO
+status: DONE
 epic: 1
 priority: medium
 dependencies: [TK-0101]
