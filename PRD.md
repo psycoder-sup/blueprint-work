@@ -763,3 +763,16 @@ anyhow = "1"
 - [ ] ASCII art header / branding
 - [ ] Error handling & user-friendly messages
 - [ ] README & usage docs
+
+---
+
+## Known Concerns
+
+### Naming collision: "task" is overloaded
+
+The MCP tool names `create_task`, `list_tasks`, `get_task`, `update_task`, and `delete_task` collide with built-in task/todo tools in LLM clients (e.g. Claude Code's `TaskCreate`, `TaskList`). This hasn't caused issues yet due to the `mcp__blueprint__` prefix, but may confuse other LLM clients or future integrations.
+
+**Possible mitigations (deferred):**
+- Rename to `bask` (short for **b**lueprint t**ask**) — concise but requires explanation
+- Rename to `blue_task` — matches existing "Blue-Task" terminology in this PRD
+- Keep as-is and rely on the MCP namespace prefix for disambiguation
