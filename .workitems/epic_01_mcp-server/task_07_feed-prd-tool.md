@@ -1,12 +1,12 @@
 ---
 id: TK-0107
 title: "Implement feed_prd Tool"
-status: TODO
+status: DONE
 epic: 1
 priority: medium
 dependencies: [TK-0101]
 blockers: []
-commits: []
+commits: [5bd420d]
 pr: ""
 ---
 
