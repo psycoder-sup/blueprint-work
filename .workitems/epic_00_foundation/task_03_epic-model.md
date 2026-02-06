@@ -1,7 +1,7 @@
 ---
 id: TK-0003
 title: "Implement Epic Model & CRUD"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: [TK-0001, TK-0002]
@@ -22,11 +22,11 @@ Define the `Epic` model struct and implement full CRUD operations at the databas
 - Excluded: MCP tool wiring (handled by epic_01)
 
 ## Acceptance Criteria
-- [ ] All 5 CRUD operations work correctly
-- [ ] Epics are scoped to a project (project_id FK enforced)
-- [ ] list_epics supports filtering by project_id and status
-- [ ] Deleting an epic cascades to its tasks
-- [ ] Unit tests for all operations
+- [x] All 5 CRUD operations work correctly
+- [x] Epics are scoped to a project (project_id FK enforced)
+- [x] list_epics supports filtering by project_id and status
+- [x] Deleting an epic cascades to its tasks
+- [x] Unit tests for all operations
 
 ## Technical Context
 ### Relevant Spec Sections
@@ -54,14 +54,14 @@ Define `Epic` struct with id (ULID), project_id, title, description, status, cre
 ## Testing Requirements
 
 ### Unit Tests
-- [ ] Create epic with valid project_id
-- [ ] Create epic with invalid project_id fails
-- [ ] List epics with project_id and status filters
-- [ ] Delete epic cascades to tasks
-- [ ] get_epic includes task count
+- [x] Create epic with valid project_id
+- [x] Create epic with invalid project_id fails
+- [x] List epics with project_id and status filters
+- [x] Delete epic cascades to tasks
+- [x] get_epic includes task count
 
 ### Integration Tests
-- [ ] Full lifecycle: create → read → update → delete
+- [x] Full lifecycle: create → read → update → delete
 
 ### Manual Tests
 - TBD

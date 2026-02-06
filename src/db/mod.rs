@@ -58,6 +58,7 @@ impl Database {
     }
 }
 
+pub mod epic;
 pub mod project;
 
 #[cfg(test)]

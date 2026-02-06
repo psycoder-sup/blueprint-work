@@ -30,7 +30,7 @@ None — this is the root epic.
 | 00 | Initialize Cargo project with clap CLI | done |
 | 01 | Create SQLite schema & migration system | done |
 | 02 | Implement Project model & CRUD | done |
-| 03 | Implement Epic model & CRUD | todo |
+| 03 | Implement Epic model & CRUD | done |
 | 04 | Implement BlueTask model & CRUD | todo |
 | 05 | Implement Dependency management | todo |
 
