@@ -1,7 +1,7 @@
 ---
 id: TK-0002
 title: "Implement Project Model & CRUD"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: [TK-0001]
@@ -23,11 +23,11 @@ Define the `Project` model struct and implement full CRUD operations at the data
 - Excluded: MCP tool wiring (handled by epic_01)
 
 ## Acceptance Criteria
-- [ ] All 5 CRUD operations work correctly
-- [ ] ULID IDs are generated for new projects
-- [ ] Status filter works on list
-- [ ] Deleting a project cascades to epics, tasks, and PRDs
-- [ ] Unit tests for all operations
+- [x] All 5 CRUD operations work correctly
+- [x] ULID IDs are generated for new projects
+- [x] Status filter works on list
+- [x] Deleting a project cascades to epics, tasks, and PRDs
+- [x] Unit tests for all operations
 
 ## Technical Context
 ### Relevant Spec Sections
@@ -56,14 +56,14 @@ Define `Project` struct with id (ULID), name, description, status (Active/Archiv
 ## Testing Requirements
 
 ### Unit Tests
-- [ ] Create project returns valid ULID
-- [ ] Get project by ID returns correct data
-- [ ] List projects with and without status filter
-- [ ] Update project modifies only provided fields
-- [ ] Delete project cascades to children
+- [x] Create project returns valid ULID
+- [x] Get project by ID returns correct data
+- [x] List projects with and without status filter
+- [x] Update project modifies only provided fields
+- [x] Delete project cascades to children
 
 ### Integration Tests
-- [ ] Full lifecycle: create → read → update → delete
+- [x] Full lifecycle: create → read → update → delete
 
 ### Manual Tests
 - TBD

@@ -58,6 +58,8 @@ impl Database {
     }
 }
 
+pub mod project;
+
 #[cfg(test)]
 mod tests {
     use super::*;
