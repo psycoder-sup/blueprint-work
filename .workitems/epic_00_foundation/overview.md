@@ -6,7 +6,7 @@ Set up the Rust project scaffolding, SQLite database schema, and the core data l
 
 ## Status
 
-`todo`
+`in-progress`
 
 ## Dependencies
 
@@ -27,8 +27,8 @@ None — this is the root epic.
 
 | # | Task | Status |
 |---|------|--------|
-| 00 | Initialize Cargo project with clap CLI | todo |
-| 01 | Create SQLite schema & migration system | todo |
+| 00 | Initialize Cargo project with clap CLI | done |
+| 01 | Create SQLite schema & migration system | done |
 | 02 | Implement Project model & CRUD | todo |
 | 03 | Implement Epic model & CRUD | todo |
 | 04 | Implement BlueTask model & CRUD | todo |

@@ -1,12 +1,12 @@
 ---
 id: TK-0000
 title: "Initialize Cargo Project with Clap CLI"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: []
 blockers: []
-commits: []
+commits: [cf66512]
 pr: ""
 ---
 

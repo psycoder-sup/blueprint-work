@@ -1,12 +1,12 @@
 ---
 id: TK-0001
 title: "Create SQLite Schema & Migration System"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: [TK-0000]
 blockers: []
-commits: []
+commits: [94f666c]
 pr: ""
 ---
 
