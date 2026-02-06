@@ -1,7 +1,7 @@
 ---
 id: TK-0100
 title: "Implement stdio JSON-RPC Transport"
-status: TODO
+status: DONE
 epic: 1
 priority: medium
 dependencies: []

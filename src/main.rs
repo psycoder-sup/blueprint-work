@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Serve => {
-            println!("Starting MCP server... (not yet implemented)");
+            let db = crate::db::Database::open_default()?;
+            db.migrate()?;
+            let server = crate::mcp::McpServer::new(db);
+            server.run().await?;
         }
         Commands::Tui => {
             println!("Launching TUI... (not yet implemented)");
