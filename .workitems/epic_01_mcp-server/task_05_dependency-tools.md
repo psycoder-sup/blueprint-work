@@ -1,7 +1,7 @@
 ---
 id: TK-0105
 title: "Implement Dependency Tools"
-status: TODO
+status: IN-PROGRESS
 epic: 1
 priority: medium
 dependencies: [TK-0101]

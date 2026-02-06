@@ -1,3 +1,4 @@
+mod dependency;
 mod epic;
 mod project;
 mod task;
@@ -296,6 +297,8 @@ pub fn dispatch_tool(name: &str, args: &Value, db: &Database) -> Option<Value> {
         "get_task" => task::handle_get_task(args, db),
         "update_task" => task::handle_update_task(args, db),
         "delete_task" => task::handle_delete_task(args, db),
+        "add_dependency" => dependency::handle_add_dependency(args, db),
+        "remove_dependency" => dependency::handle_remove_dependency(args, db),
         _ => {
             let is_known = tool_definitions()
                 .iter()
@@ -352,14 +355,14 @@ mod tests {
     #[test]
     fn test_dispatch_known_tool_returns_stub() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("add_dependency", &json!({}), &db);
+        let result = dispatch_tool("get_status", &json!({}), &db);
         assert!(result.is_some());
         let val = result.unwrap();
         assert_eq!(val["isError"], true);
         assert!(val["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("add_dependency"));
+            .contains("get_status"));
     }
 
     #[test]

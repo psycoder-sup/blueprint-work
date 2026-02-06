@@ -29,7 +29,7 @@ Implement the stdio-based MCP (Model Context Protocol) server. This is the core 
 | 02 | Implement Project CRUD tools (5 tools) | done |
 | 03 | Implement Epic CRUD tools (5 tools) | done |
 | 04 | Implement BlueTask CRUD tools (5 tools) | done |
-| 05 | Implement dependency tools (add/remove) | todo |
+| 05 | Implement dependency tools (add/remove) | done |
 | 06 | Implement get_status tool | todo |
 | 07 | Implement feed_prd tool | todo |
 
