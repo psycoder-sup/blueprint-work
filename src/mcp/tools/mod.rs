@@ -1,5 +1,6 @@
 mod dependency;
 mod epic;
+mod prd;
 mod project;
 mod status;
 mod task;
@@ -234,10 +235,10 @@ pub fn tool_definitions() -> Vec<Value> {
             "Feed a PRD document to break down into epics and tasks",
             json!({
                 "project_id": { "type": "string", "description": "Target project ID" },
-                "content": { "type": "string", "description": "PRD content as text or markdown" },
-                "title": { "type": "string", "description": "PRD title" }
+                "title": { "type": "string", "description": "PRD title" },
+                "content": { "type": "string", "description": "PRD content as text or markdown" }
             }),
-            &["project_id", "content", "title"],
+            &["project_id", "title", "content"],
         ),
     ]
 }
@@ -301,6 +302,7 @@ pub fn dispatch_tool(name: &str, args: &Value, db: &Database) -> Option<Value> {
         "add_dependency" => dependency::handle_add_dependency(args, db),
         "remove_dependency" => dependency::handle_remove_dependency(args, db),
         "get_status" => status::handle_get_status(args, db),
+        "feed_prd" => prd::handle_feed_prd(args, db),
         _ => {
             let is_known = tool_definitions()
                 .iter()
@@ -353,19 +355,6 @@ mod tests {
     }
 
     // --- Dispatch tests ---
-
-    #[test]
-    fn test_dispatch_known_tool_returns_stub() {
-        let (db, _dir) = test_db();
-        let result = dispatch_tool("feed_prd", &json!({}), &db);
-        assert!(result.is_some());
-        let val = result.unwrap();
-        assert_eq!(val["isError"], true);
-        assert!(val["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("feed_prd"));
-    }
 
     #[test]
     fn test_dispatch_unknown_tool_returns_none() {
