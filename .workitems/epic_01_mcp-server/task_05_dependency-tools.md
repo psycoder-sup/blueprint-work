@@ -1,12 +1,12 @@
 ---
 id: TK-0105
 title: "Implement Dependency Tools"
-status: IN-PROGRESS
+status: DONE
 epic: 1
 priority: medium
 dependencies: [TK-0101]
 blockers: []
-commits: []
+commits: [01e0ca1]
 pr: ""
 ---
 
@@ -22,11 +22,11 @@ Wire up the add_dependency and remove_dependency MCP tools.
 - Clear error messages for invalid references
 
 ## Acceptance Criteria
-- [ ] add_dependency creates a valid blocks/blocked-by relationship
-- [ ] Duplicate dependencies handled gracefully
-- [ ] Self-references rejected
-- [ ] remove_dependency works for existing deps
-- [ ] Removing non-existent deps returns informative message
+- [x] add_dependency creates a valid blocks/blocked-by relationship
+- [x] Duplicate dependencies handled gracefully
+- [x] Self-references rejected
+- [x] remove_dependency works for existing deps
+- [x] Removing non-existent deps returns informative message
 
 ## Technical Context
 ### Relevant Spec Sections
@@ -53,14 +53,14 @@ Wire up the add_dependency and remove_dependency MCP tools.
 ## Testing Requirements
 
 ### Unit Tests
-- [ ] add_dependency with valid references
-- [ ] add_dependency rejects self-reference
-- [ ] add_dependency rejects duplicate
-- [ ] remove_dependency for existing dep
-- [ ] remove_dependency for non-existent dep
+- [x] add_dependency with valid references
+- [x] add_dependency rejects self-reference
+- [x] add_dependency rejects duplicate
+- [x] remove_dependency for existing dep
+- [x] remove_dependency for non-existent dep
 
 ### Integration Tests
-- [ ] Full dependency lifecycle via MCP tools
+- [x] Full dependency lifecycle via MCP tools
 
 ### Manual Tests
 - [ ] Test via MCP client
