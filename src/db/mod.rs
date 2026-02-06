@@ -58,6 +58,7 @@ impl Database {
     }
 }
 
+pub mod dependency;
 pub mod epic;
 pub mod project;
 pub mod task;

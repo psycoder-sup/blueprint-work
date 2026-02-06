@@ -131,11 +131,30 @@ pub fn update_epic(db: &Database, id: &str, input: UpdateEpicInput) -> Result<Ep
 }
 
 pub fn delete_epic(db: &Database, id: &str) -> Result<bool> {
-    let rows_affected = db
+    let tx = db
         .conn()
+        .unchecked_transaction()
+        .context("failed to begin transaction for epic deletion")?;
+
+    // Clean up dependencies referencing the epic itself
+    tx.execute(
+        "DELETE FROM dependencies WHERE (blocker_type = 'epic' AND blocker_id = ?1) OR (blocked_type = 'epic' AND blocked_id = ?1)",
+        [id],
+    )
+    .context("failed to clean up epic dependencies")?;
+
+    // Clean up dependencies referencing child tasks (which will be cascade-deleted)
+    tx.execute(
+        "DELETE FROM dependencies WHERE (blocker_type = 'task' AND blocker_id IN (SELECT id FROM tasks WHERE epic_id = ?1)) OR (blocked_type = 'task' AND blocked_id IN (SELECT id FROM tasks WHERE epic_id = ?1))",
+        [id],
+    )
+    .context("failed to clean up child task dependencies")?;
+
+    let rows_affected = tx
         .execute("DELETE FROM epics WHERE id = ?1", [id])
         .context("failed to delete epic")?;
 
+    tx.commit().context("failed to commit epic deletion")?;
     Ok(rows_affected > 0)
 }
 

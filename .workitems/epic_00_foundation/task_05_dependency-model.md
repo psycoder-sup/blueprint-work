@@ -1,7 +1,7 @@
 ---
 id: TK-0005
 title: "Implement Dependency Management"
-status: TODO
+status: DONE
 epic: 0
 priority: medium
 dependencies: [TK-0003, TK-0004]
