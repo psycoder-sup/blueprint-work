@@ -1,4 +1,5 @@
 mod app;
+pub mod graph;
 mod theme;
 mod ui;
 
