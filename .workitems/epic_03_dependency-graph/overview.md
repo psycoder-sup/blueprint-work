@@ -27,11 +27,11 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 | # | Task | Status |
 |---|------|--------|
 | 00 | Implement DAG topological sort & layer assignment | done |
-| 01 | Implement edge-crossing minimization | todo |
-| 02 | Build ASCII box-node renderer | todo |
-| 03 | Implement animated marching dotted border | todo |
-| 04 | Implement pulsing border for blocked nodes | todo |
-| 05 | Implement edge routing | todo |
+| 01 | Implement edge-crossing minimization | done |
+| 02 | Build ASCII box-node renderer | done |
+| 03 | Implement animated marching dotted border | done |
+| 04 | Implement pulsing border for blocked nodes | done |
+| 05 | Implement edge routing | done |
 | 06 | Build epic-level graph view | todo |
 | 07 | Build task-level graph view | todo |
 | 08 | Implement graph view toggle & scroll | todo |

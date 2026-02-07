@@ -1,7 +1,7 @@
 ---
 id: TK-0304
 title: "Implement Pulsing Border for Blocked Nodes"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0302]

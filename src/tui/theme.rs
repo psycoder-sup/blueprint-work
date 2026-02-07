@@ -15,6 +15,8 @@ pub const TEXT_DIM: Color = Color::Rgb(0xb0, 0xb0, 0xb0);
 pub const TEXT_BRIGHT: Color = Color::Rgb(0xff, 0xff, 0xff);
 pub const BORDER_DIM: Color = Color::Rgb(0x00, 0x5f, 0x5f);
 pub const BORDER_BRIGHT: Color = Color::Rgb(0x00, 0xff, 0xf5);
+pub const DARK_RED: Color = Color::Rgb(0x66, 0x11, 0x22);
+pub const DARK_ORANGE: Color = Color::Rgb(0x66, 0x33, 0x11);
 
 // ── Style presets ──────────────────────────────────────────────────
 

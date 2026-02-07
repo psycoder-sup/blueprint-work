@@ -1,5 +1,6 @@
 mod app;
 pub mod graph;
+pub mod graph_render;
 mod theme;
 mod ui;
 

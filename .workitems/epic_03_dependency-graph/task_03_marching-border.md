@@ -1,7 +1,7 @@
 ---
 id: TK-0303
 title: "Implement Animated Marching Dotted Border"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0302]

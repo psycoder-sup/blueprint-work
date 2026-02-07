@@ -57,6 +57,10 @@ pub struct App {
     pub dep_display_rows: Vec<DependencyDisplayRow>,
     pub last_refresh: Instant,
     pub last_db_watermark: String,
+    /// Global animation frame counter (0–3) for marching border effect.
+    pub animation_frame: u8,
+    /// Tick counter to derive animation frame from the 100ms poll interval.
+    animation_tick: u8,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -90,6 +94,8 @@ impl App {
             dep_display_rows: Vec::new(),
             last_refresh: Instant::now(),
             last_db_watermark: String::new(),
+            animation_frame: 0,
+            animation_tick: 0,
         };
         app.refresh_data();
         Ok(app)
@@ -105,6 +111,13 @@ impl App {
                         self.handle_key(key);
                     }
                 }
+            }
+
+            // Advance animation frame every 5 ticks (~500ms at 100ms poll).
+            self.animation_tick += 1;
+            if self.animation_tick >= 5 {
+                self.animation_tick = 0;
+                self.animation_frame = (self.animation_frame + 1) % 4;
             }
 
             // Auto-refresh: poll DB for changes every ~1 second

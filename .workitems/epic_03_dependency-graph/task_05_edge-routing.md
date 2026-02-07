@@ -1,7 +1,7 @@
 ---
 id: TK-0305
 title: "Implement Edge Routing"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0300, TK-0302]

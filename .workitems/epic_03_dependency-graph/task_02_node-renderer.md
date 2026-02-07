@@ -1,7 +1,7 @@
 ---
 id: TK-0302
 title: "Build ASCII Box-Node Renderer"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0300]
