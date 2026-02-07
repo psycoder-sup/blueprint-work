@@ -1,7 +1,7 @@
 ---
 id: TK-0203
 title: "Build Epic List Panel"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0201]

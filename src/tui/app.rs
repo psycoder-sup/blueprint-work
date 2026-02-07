@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Stdout;
 use std::time::Duration;
 
@@ -7,10 +8,11 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::db::Database;
+use crate::db::dependency::is_blocked;
 use crate::db::epic::list_epics;
 use crate::db::project::list_projects;
 use crate::db::task::list_tasks;
-use crate::models::{BlueTask, Epic, Project};
+use crate::models::{BlueTask, DependencyType, Epic, Project};
 use crate::tui::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +30,7 @@ pub struct App {
     pub selector_idx: usize,
     pub epics: Vec<Epic>,
     pub selected_epic_idx: usize,
+    pub blocked_epic_ids: HashSet<String>,
     pub tasks: Vec<BlueTask>,
     pub selected_task_idx: usize,
 }
@@ -43,6 +46,7 @@ impl App {
             selector_idx: 0,
             epics: Vec::new(),
             selected_epic_idx: 0,
+            blocked_epic_ids: HashSet::new(),
             tasks: Vec::new(),
             selected_task_idx: 0,
         };
@@ -85,6 +89,17 @@ impl App {
             .unwrap_or_default();
         self.selected_epic_idx = self.selected_epic_idx.min(self.epics.len().saturating_sub(1));
 
+        self.blocked_epic_ids = self
+            .epics
+            .iter()
+            .filter(|e| is_blocked(&self.db, &DependencyType::Epic, &e.id).unwrap_or(false))
+            .map(|e| e.id.clone())
+            .collect();
+
+        self.refresh_tasks();
+    }
+
+    pub fn refresh_tasks(&mut self) {
         self.tasks = self
             .selected_epic()
             .and_then(|e| list_tasks(&self.db, Some(&e.id), None).ok())
@@ -100,9 +115,20 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
+        let len = self.epics.len();
         match key.code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('p') => self.open_project_selector(),
+            KeyCode::Char('j') | KeyCode::Down if len > 0 => {
+                self.selected_epic_idx = (self.selected_epic_idx + 1) % len;
+                self.selected_task_idx = 0;
+                self.refresh_tasks();
+            }
+            KeyCode::Char('k') | KeyCode::Up if len > 0 => {
+                self.selected_epic_idx = (self.selected_epic_idx + len - 1) % len;
+                self.selected_task_idx = 0;
+                self.refresh_tasks();
+            }
             _ => {}
         }
     }
@@ -144,8 +170,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::dependency::add_dependency;
+    use crate::db::epic::create_epic;
     use crate::db::project::create_project;
-    use crate::models::CreateProjectInput;
+    use crate::db::task::create_task;
+    use crate::models::{AddDependencyInput, CreateEpicInput, CreateProjectInput, CreateTaskInput};
     use tempfile::TempDir;
 
     fn open_temp_db() -> (Database, TempDir) {
@@ -249,5 +278,170 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(app.mode, InputMode::Normal);
         assert!(app.running);
+    }
+
+    fn app_with_epics(epic_count: usize) -> (App, TempDir) {
+        let (db, dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "Test Project".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        for i in 0..epic_count {
+            create_epic(
+                &db,
+                CreateEpicInput {
+                    project_id: project.id.clone(),
+                    title: format!("Epic {i}"),
+                    description: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        let app = App::new(db).unwrap();
+        (app, dir)
+    }
+
+    #[test]
+    fn j_k_navigates_epics_with_wrapping() {
+        let (mut app, _dir) = app_with_epics(3);
+        assert_eq!(app.selected_epic_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_epic_idx, 1);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_epic_idx, 2);
+
+        // Wrap forward
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_epic_idx, 0);
+
+        // Wrap backward
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.selected_epic_idx, 2);
+    }
+
+    #[test]
+    fn j_k_noop_when_no_epics() {
+        let (mut app, _dir) = app_with_projects(1);
+        assert!(app.epics.is_empty());
+        assert_eq!(app.selected_epic_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_epic_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.selected_epic_idx, 0);
+    }
+
+    #[test]
+    fn navigating_epics_refreshes_tasks() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_a = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_b = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Epic B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic_a.id.clone(),
+                title: "Task A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic_b.id.clone(),
+                title: "Task B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+
+        // Epics are ordered by created_at DESC, so epic_b is first
+        let initial_task_title = app.tasks[0].title.clone();
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        let new_task_title = app.tasks[0].title.clone();
+
+        assert_ne!(initial_task_title, new_task_title);
+    }
+
+    #[test]
+    fn blocked_epic_ids_populated_after_refresh() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_a = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Blocker".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_b = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Blocked".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        // epic_a blocks epic_b
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Epic,
+                blocker_id: epic_a.id.clone(),
+                blocked_type: DependencyType::Epic,
+                blocked_id: epic_b.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let app = App::new(db).unwrap();
+
+        assert!(app.blocked_epic_ids.contains(&epic_b.id));
+        assert!(!app.blocked_epic_ids.contains(&epic_a.id));
     }
 }

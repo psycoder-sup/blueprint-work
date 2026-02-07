@@ -51,6 +51,14 @@ pub fn project_status_style(status: &ProjectStatus) -> Style {
     }
 }
 
+// ── Blocked indicator ──────────────────────────────────────────────
+
+pub const BLOCKED_SYMBOL: &str = "⚠";
+
+pub fn blocked_style() -> Style {
+    Style::default().fg(NEON_ORANGE)
+}
+
 // ── Progress bar ───────────────────────────────────────────────────
 
 pub fn progress_bar(done: usize, total: usize, width: usize) -> String {
@@ -120,5 +128,11 @@ mod tests {
         assert_eq!(status_symbol(&ItemStatus::Todo), "■");
         assert_eq!(status_symbol(&ItemStatus::InProgress), "▶");
         assert_eq!(status_symbol(&ItemStatus::Done), "◉");
+    }
+
+    #[test]
+    fn blocked_style_returns_neon_orange() {
+        let style = blocked_style();
+        assert_eq!(style.fg, Some(NEON_ORANGE));
     }
 }

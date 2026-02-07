@@ -50,6 +50,7 @@ pub struct Epic {
     pub created_at: String,
     pub updated_at: String,
     pub task_count: i64,
+    pub done_count: i64,
 }
 
 pub struct CreateEpicInput {

@@ -52,15 +52,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
 
-    let epics_list = build_list(&app.epics, app.selected_epic_idx, " Epics ", true);
-    frame.render_widget(epics_list, body_chunks[0]);
+    draw_epic_list(frame, app, body_chunks[0]);
 
     let tasks_list = build_list(&app.tasks, app.selected_task_idx, " Tasks ", false);
     frame.render_widget(tasks_list, body_chunks[1]);
 
     // Footer
     let help_text = match app.mode {
-        InputMode::Normal => "  q: Quit  p: Projects",
+        InputMode::Normal => "  q: Quit  p: Projects  j/k: Epics",
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
@@ -173,6 +172,42 @@ fn build_list<'a, T: ListEntry>(
         .collect();
 
     List::new(list_items).block(panel_block(title, focused))
+}
+
+fn draw_epic_list(frame: &mut Frame, app: &App, area: Rect) {
+    let list_items: Vec<ListItem> = app
+        .epics
+        .iter()
+        .enumerate()
+        .map(|(i, epic)| {
+            let (marker, marker_style, title_style) = selection_styles(i == app.selected_epic_idx);
+            let symbol = theme::status_symbol(&epic.status);
+            let status_style = theme::status_style(&epic.status);
+
+            let mut spans = vec![
+                Span::styled(marker, marker_style),
+                Span::styled(format!("{symbol} "), status_style),
+                Span::styled(epic.title.to_string(), title_style),
+            ];
+
+            if app.blocked_epic_ids.contains(&epic.id) {
+                spans.push(Span::styled(
+                    format!(" {}", theme::BLOCKED_SYMBOL),
+                    theme::blocked_style(),
+                ));
+            }
+
+            spans.push(Span::styled(
+                format!(" [{}/{}]", epic.done_count, epic.task_count),
+                Style::default().fg(theme::TEXT_DIM),
+            ));
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(list_items).block(panel_block(" Epics ", true));
+    frame.render_widget(list, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

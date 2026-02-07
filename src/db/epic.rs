@@ -5,6 +5,8 @@ use crate::db::Database;
 use crate::models::{CreateEpicInput, Epic, ItemStatus, UpdateEpicInput};
 
 const SELECT_COLUMNS: &str = "e.id, e.project_id, e.title, e.description, e.status, e.created_at, e.updated_at";
+const TASK_AGGREGATES: &str =
+    "COUNT(t.id) AS task_count, SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS done_count";
 
 fn row_to_epic(row: &Row) -> rusqlite::Result<Epic> {
     let status_str: String = row.get("status")?;
@@ -25,6 +27,7 @@ fn row_to_epic(row: &Row) -> rusqlite::Result<Epic> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         task_count: row.get("task_count")?,
+        done_count: row.get("done_count")?,
     })
 }
 
@@ -42,9 +45,9 @@ pub fn create_epic(db: &Database, input: CreateEpicInput) -> Result<Epic> {
 
 pub fn get_epic(db: &Database, id: &str) -> Result<Option<Epic>> {
     let sql = format!(
-        "SELECT {SELECT_COLUMNS}, COUNT(t.id) AS task_count
-         FROM epics e LEFT JOIN tasks t ON t.epic_id = e.id
-         WHERE e.id = ?1
+        "SELECT {SELECT_COLUMNS}, {TASK_AGGREGATES} \
+         FROM epics e LEFT JOIN tasks t ON t.epic_id = e.id \
+         WHERE e.id = ?1 \
          GROUP BY e.id"
     );
     db.conn()
@@ -60,7 +63,7 @@ pub fn list_epics(
     status: Option<ItemStatus>,
 ) -> Result<Vec<Epic>> {
     let base = format!(
-        "SELECT {SELECT_COLUMNS}, COUNT(t.id) AS task_count
+        "SELECT {SELECT_COLUMNS}, {TASK_AGGREGATES} \
          FROM epics e LEFT JOIN tasks t ON t.epic_id = e.id"
     );
     let tail = "GROUP BY e.id ORDER BY e.created_at DESC";
