@@ -1,12 +1,12 @@
 ---
 id: TK-0205
 title: "Build Project Status Overview Panel"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0201]
 blockers: []
-commits: []
+commits: [532b067]
 pr: ""
 ---
 

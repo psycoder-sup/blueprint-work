@@ -6,7 +6,7 @@ Build the cyberpunk-styled terminal UI dashboard using ratatui + crossterm. The 
 
 ## Status
 
-`in-progress`
+`done`
 
 ## Dependencies
 
@@ -29,10 +29,10 @@ Build the cyberpunk-styled terminal UI dashboard using ratatui + crossterm. The 
 | 02 | Build project selector panel | done |
 | 03 | Build epic list panel | done |
 | 04 | Build blue-task list panel | done |
-| 05 | Build project status overview panel | todo |
-| 06 | Build mini dependency panel | todo |
-| 07 | Implement keyboard navigation | todo |
-| 08 | Implement auto-refresh from SQLite | todo |
+| 05 | Build project status overview panel | done |
+| 06 | Build mini dependency panel | done |
+| 07 | Implement keyboard navigation | done |
+| 08 | Implement auto-refresh from SQLite | done |
 
 ## Acceptance Criteria
 

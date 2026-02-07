@@ -1,12 +1,12 @@
 ---
 id: TK-0207
 title: "Implement Keyboard Navigation"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0202, TK-0203, TK-0204]
 blockers: []
-commits: []
+commits: [532b067]
 pr: ""
 ---
 

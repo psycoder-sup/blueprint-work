@@ -1,12 +1,12 @@
 ---
 id: TK-0208
 title: "Implement Auto-Refresh from SQLite"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0200]
 blockers: []
-commits: []
+commits: [532b067]
 pr: ""
 ---
 
