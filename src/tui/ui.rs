@@ -4,8 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::models::{BlueTask, Epic, ItemStatus};
-use crate::tui::app::{App, InputMode};
+use crate::tui::app::{App, FocusedPanel, InputMode};
 use crate::tui::theme;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -53,14 +52,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     draw_epic_list(frame, app, body_chunks[0]);
-
-    let tasks_list = build_list(&app.tasks, app.selected_task_idx, " Tasks ", false);
-    frame.render_widget(tasks_list, body_chunks[1]);
+    draw_task_list(frame, app, body_chunks[1]);
 
     // Footer
     let help_text = match app.mode {
-        InputMode::Normal => "  q: Quit  p: Projects  j/k: Epics",
+        InputMode::Normal => {
+            "  q: Quit  p: Projects  Tab: Focus  j/k: Navigate  s: Status  Enter: Detail"
+        }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
+        InputMode::TaskDetail => "  Esc: Close",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -79,32 +79,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, chunks[2]);
 
     // Popup overlay
-    if app.mode == InputMode::ProjectSelector {
-        draw_project_selector(frame, app);
-    }
-}
-
-/// Trait for items that can be rendered in a selectable list.
-trait ListEntry {
-    fn title(&self) -> &str;
-    fn status(&self) -> &ItemStatus;
-}
-
-impl ListEntry for Epic {
-    fn title(&self) -> &str {
-        &self.title
-    }
-    fn status(&self) -> &ItemStatus {
-        &self.status
-    }
-}
-
-impl ListEntry for BlueTask {
-    fn title(&self) -> &str {
-        &self.title
-    }
-    fn status(&self) -> &ItemStatus {
-        &self.status
+    match app.mode {
+        InputMode::ProjectSelector => draw_project_selector(frame, app),
+        InputMode::TaskDetail => draw_task_detail(frame, app),
+        InputMode::Normal => {}
     }
 }
 
@@ -147,33 +125,6 @@ fn panel_block(title: &str, focused: bool) -> Block<'_> {
         .style(Style::default().bg(theme::BG))
 }
 
-fn build_list<'a, T: ListEntry>(
-    items: &[T],
-    selected_idx: usize,
-    title: &'a str,
-    focused: bool,
-) -> List<'a> {
-    let list_items: Vec<ListItem> = items
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let (marker, marker_style, title_style) = selection_styles(i == selected_idx);
-            let symbol = theme::status_symbol(entry.status());
-            let status_style = theme::status_style(entry.status());
-
-            let line = Line::from(vec![
-                Span::styled(marker, marker_style),
-                Span::styled(format!("{symbol} "), status_style),
-                Span::styled(entry.title().to_string(), title_style),
-            ]);
-
-            ListItem::new(line)
-        })
-        .collect();
-
-    List::new(list_items).block(panel_block(title, focused))
-}
-
 fn draw_epic_list(frame: &mut Frame, app: &App, area: Rect) {
     let list_items: Vec<ListItem> = app
         .epics
@@ -187,7 +138,7 @@ fn draw_epic_list(frame: &mut Frame, app: &App, area: Rect) {
             let mut spans = vec![
                 Span::styled(marker, marker_style),
                 Span::styled(format!("{symbol} "), status_style),
-                Span::styled(epic.title.to_string(), title_style),
+                Span::styled(&epic.title, title_style),
             ];
 
             if app.blocked_epic_ids.contains(&epic.id) {
@@ -206,7 +157,8 @@ fn draw_epic_list(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(list_items).block(panel_block(" Epics ", true));
+    let focused = app.focused_panel == FocusedPanel::Epics;
+    let list = List::new(list_items).block(panel_block(" Epics ", focused));
     frame.render_widget(list, area);
 }
 
@@ -228,6 +180,102 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focused_panel == FocusedPanel::Tasks;
+
+    let list_items: Vec<ListItem> = app
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(i, task)| {
+            let (marker, marker_style, title_style) =
+                selection_styles(i == app.selected_task_idx);
+            let symbol = theme::status_symbol(&task.status);
+            let status_style = theme::status_style(&task.status);
+
+            let mut spans = vec![
+                Span::styled(marker, marker_style),
+                Span::styled(format!("{symbol} "), status_style),
+                Span::styled(&task.title, title_style),
+            ];
+
+            if app.blocked_task_ids.contains(&task.id) {
+                spans.push(Span::styled(
+                    format!(" {}", theme::BLOCKED_SYMBOL),
+                    theme::blocked_style(),
+                ));
+            }
+
+            spans.push(Span::styled(
+                format!(" [{}]", task.status.as_str()),
+                status_style,
+            ));
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(list_items).block(panel_block(" Tasks ", focused));
+    frame.render_widget(list, area);
+}
+
+fn draw_task_detail(frame: &mut Frame, app: &App) {
+    let Some(task) = app.selected_task() else {
+        return;
+    };
+    let area = centered_rect(60, 50, frame.area());
+    frame.render_widget(Clear, area);
+
+    let symbol = theme::status_symbol(&task.status);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            &task.title,
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                format!("{symbol} "),
+                theme::status_style(&task.status),
+            ),
+            Span::styled(
+                task.status.as_str(),
+                theme::status_style(&task.status),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    if !task.description.is_empty() {
+        lines.push(Line::from(Span::styled(
+            &task.description,
+            Style::default().fg(theme::TEXT_DIM),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(blocker_names) = app.task_blocker_names.get(&task.id) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} Blocked by: ", theme::BLOCKED_SYMBOL),
+                theme::blocked_style(),
+            ),
+            Span::styled(
+                blocker_names.join(", "),
+                Style::default().fg(theme::TEXT_DIM),
+            ),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(panel_block(" Task Detail ", true))
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    frame.render_widget(paragraph, area);
 }
 
 fn draw_project_selector(frame: &mut Frame, app: &App) {

@@ -28,7 +28,7 @@ Build the cyberpunk-styled terminal UI dashboard using ratatui + crossterm. The 
 | 01 | Implement cyberpunk theme & color palette | done |
 | 02 | Build project selector panel | done |
 | 03 | Build epic list panel | done |
-| 04 | Build blue-task list panel | todo |
+| 04 | Build blue-task list panel | done |
 | 05 | Build project status overview panel | todo |
 | 06 | Build mini dependency panel | todo |
 | 07 | Implement keyboard navigation | todo |

@@ -1,7 +1,7 @@
 ---
 id: TK-0204
 title: "Build Blue-Task List Panel"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0201]

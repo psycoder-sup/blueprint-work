@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Stdout;
 use std::time::Duration;
 
@@ -8,23 +8,31 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::db::Database;
-use crate::db::dependency::is_blocked;
+use crate::db::dependency::{get_blockers, is_blocked};
 use crate::db::epic::list_epics;
 use crate::db::project::list_projects;
-use crate::db::task::list_tasks;
-use crate::models::{BlueTask, DependencyType, Epic, Project};
+use crate::db::task::{get_task, list_tasks, update_task};
+use crate::models::{BlueTask, DependencyType, Epic, ItemStatus, Project, UpdateTaskInput};
 use crate::tui::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     ProjectSelector,
+    TaskDetail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPanel {
+    Epics,
+    Tasks,
 }
 
 pub struct App {
     pub db: Database,
     pub running: bool,
     pub mode: InputMode,
+    pub focused_panel: FocusedPanel,
     pub projects: Vec<Project>,
     pub selected_project_idx: usize,
     pub selector_idx: usize,
@@ -33,6 +41,17 @@ pub struct App {
     pub blocked_epic_ids: HashSet<String>,
     pub tasks: Vec<BlueTask>,
     pub selected_task_idx: usize,
+    pub blocked_task_ids: HashSet<String>,
+    /// Cached blocker names per task ID, computed in `refresh_tasks()`.
+    pub task_blocker_names: HashMap<String, Vec<String>>,
+}
+
+/// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
+fn wrap_index(current: usize, len: usize, delta: isize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    Some(((current as isize + delta).rem_euclid(len as isize)) as usize)
 }
 
 impl App {
@@ -41,6 +60,7 @@ impl App {
             db,
             running: true,
             mode: InputMode::Normal,
+            focused_panel: FocusedPanel::Epics,
             projects: Vec::new(),
             selected_project_idx: 0,
             selector_idx: 0,
@@ -49,6 +69,8 @@ impl App {
             blocked_epic_ids: HashSet::new(),
             tasks: Vec::new(),
             selected_task_idx: 0,
+            blocked_task_ids: HashSet::new(),
+            task_blocker_names: HashMap::new(),
         };
         app.refresh_data();
         Ok(app)
@@ -105,32 +127,128 @@ impl App {
             .and_then(|e| list_tasks(&self.db, Some(&e.id), None).ok())
             .unwrap_or_default();
         self.selected_task_idx = self.selected_task_idx.min(self.tasks.len().saturating_sub(1));
+
+        self.blocked_task_ids = self
+            .tasks
+            .iter()
+            .filter(|t| is_blocked(&self.db, &DependencyType::Task, &t.id).unwrap_or(false))
+            .map(|t| t.id.clone())
+            .collect();
+
+        self.task_blocker_names = self
+            .blocked_task_ids
+            .iter()
+            .map(|task_id| {
+                let names = get_blockers(&self.db, &DependencyType::Task, task_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|dep| {
+                        get_task(&self.db, &dep.blocker_id)
+                            .ok()
+                            .flatten()
+                            .map(|t| t.title)
+                    })
+                    .collect();
+                (task_id.clone(), names)
+            })
+            .collect();
+    }
+
+    /// Returns the currently selected task, if any.
+    pub fn selected_task(&self) -> Option<&BlueTask> {
+        self.tasks.get(self.selected_task_idx)
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
         match self.mode {
             InputMode::Normal => self.handle_normal_key(key),
             InputMode::ProjectSelector => self.handle_selector_key(key),
+            InputMode::TaskDetail => self.handle_task_detail_key(key),
         }
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
-        let len = self.epics.len();
         match key.code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('p') => self.open_project_selector(),
-            KeyCode::Char('j') | KeyCode::Down if len > 0 => {
-                self.selected_epic_idx = (self.selected_epic_idx + 1) % len;
-                self.selected_task_idx = 0;
-                self.refresh_tasks();
+            KeyCode::Tab => self.toggle_focus(),
+            KeyCode::Char('j') | KeyCode::Down => self.navigate_down(),
+            KeyCode::Char('k') | KeyCode::Up => self.navigate_up(),
+            KeyCode::Char('s') if self.focused_panel == FocusedPanel::Tasks => {
+                self.cycle_task_status();
             }
-            KeyCode::Char('k') | KeyCode::Up if len > 0 => {
-                self.selected_epic_idx = (self.selected_epic_idx + len - 1) % len;
-                self.selected_task_idx = 0;
-                self.refresh_tasks();
+            KeyCode::Enter
+                if self.focused_panel == FocusedPanel::Tasks
+                    && self.selected_task().is_some() =>
+            {
+                self.mode = InputMode::TaskDetail;
             }
             _ => {}
         }
+    }
+
+    fn handle_task_detail_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                self.mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn toggle_focus(&mut self) {
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::Epics => FocusedPanel::Tasks,
+            FocusedPanel::Tasks => FocusedPanel::Epics,
+        };
+    }
+
+    fn navigate_down(&mut self) {
+        self.navigate(1);
+    }
+
+    fn navigate_up(&mut self) {
+        self.navigate(-1);
+    }
+
+    /// Moves the selection cursor by `delta` (+1 for down, -1 for up) in the
+    /// currently focused panel, wrapping around at both ends.
+    fn navigate(&mut self, delta: isize) {
+        match self.focused_panel {
+            FocusedPanel::Epics => {
+                if let Some(next) = wrap_index(self.selected_epic_idx, self.epics.len(), delta) {
+                    self.selected_epic_idx = next;
+                    self.selected_task_idx = 0;
+                    self.refresh_tasks();
+                }
+            }
+            FocusedPanel::Tasks => {
+                if let Some(next) = wrap_index(self.selected_task_idx, self.tasks.len(), delta) {
+                    self.selected_task_idx = next;
+                }
+            }
+        }
+    }
+
+    fn cycle_task_status(&mut self) {
+        let Some(task) = self.tasks.get(self.selected_task_idx) else {
+            return;
+        };
+        let next = match task.status {
+            ItemStatus::Todo => ItemStatus::InProgress,
+            ItemStatus::InProgress => ItemStatus::Done,
+            ItemStatus::Done => ItemStatus::Todo,
+        };
+        let task_id = task.id.clone();
+        let _ = update_task(
+            &self.db,
+            &task_id,
+            UpdateTaskInput {
+                status: Some(next),
+                ..Default::default()
+            },
+        );
+        self.refresh_data();
     }
 
     fn handle_selector_key(&mut self, key: KeyEvent) {
@@ -443,5 +561,222 @@ mod tests {
 
         assert!(app.blocked_epic_ids.contains(&epic_b.id));
         assert!(!app.blocked_epic_ids.contains(&epic_a.id));
+    }
+
+    /// Creates an app with one project, one epic, and `n` tasks.
+    fn app_with_tasks(n: usize) -> (App, TempDir) {
+        let (db, dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Epic".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        for i in 0..n {
+            create_task(
+                &db,
+                CreateTaskInput {
+                    epic_id: epic.id.clone(),
+                    title: format!("Task {i}"),
+                    description: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        let app = App::new(db).unwrap();
+        (app, dir)
+    }
+
+    #[test]
+    fn tab_toggles_focused_panel() {
+        let (mut app, _dir) = app_with_tasks(1);
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focused_panel, FocusedPanel::Tasks);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+    }
+
+    #[test]
+    fn j_k_navigates_tasks_when_task_panel_focused() {
+        let (mut app, _dir) = app_with_tasks(3);
+        app.focused_panel = FocusedPanel::Tasks;
+        assert_eq!(app.selected_task_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_task_idx, 1);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_task_idx, 2);
+
+        // Wrap forward
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_task_idx, 0);
+
+        // Wrap backward
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.selected_task_idx, 2);
+    }
+
+    #[test]
+    fn j_k_still_navigates_epics_when_epic_panel_focused() {
+        let (mut app, _dir) = app_with_epics(3);
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+        assert_eq!(app.selected_epic_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_epic_idx, 1);
+    }
+
+    #[test]
+    fn j_k_task_noop_when_no_tasks() {
+        let (mut app, _dir) = app_with_tasks(0);
+        app.focused_panel = FocusedPanel::Tasks;
+        assert_eq!(app.selected_task_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.selected_task_idx, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.selected_task_idx, 0);
+    }
+
+    #[test]
+    fn s_cycles_task_status() {
+        let (mut app, _dir) = app_with_tasks(1);
+        app.focused_panel = FocusedPanel::Tasks;
+
+        assert_eq!(app.tasks[0].status, ItemStatus::Todo);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.tasks[0].status, ItemStatus::InProgress);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.tasks[0].status, ItemStatus::Done);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.tasks[0].status, ItemStatus::Todo);
+    }
+
+    #[test]
+    fn s_persists_to_db() {
+        let (mut app, _dir) = app_with_tasks(1);
+        app.focused_panel = FocusedPanel::Tasks;
+        let task_id = app.tasks[0].id.clone();
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+
+        // Read directly from DB
+        let task = crate::db::task::get_task(&app.db, &task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.status, ItemStatus::InProgress);
+    }
+
+    #[test]
+    fn s_is_noop_when_no_tasks() {
+        let (mut app, _dir) = app_with_tasks(0);
+        app.focused_panel = FocusedPanel::Tasks;
+
+        // Should not panic
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+    }
+
+    #[test]
+    fn enter_opens_task_detail_popup() {
+        let (mut app, _dir) = app_with_tasks(1);
+        app.focused_panel = FocusedPanel::Tasks;
+
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::TaskDetail);
+    }
+
+    #[test]
+    fn esc_closes_task_detail_popup() {
+        let (mut app, _dir) = app_with_tasks(1);
+        app.focused_panel = FocusedPanel::Tasks;
+
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::TaskDetail);
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn enter_is_noop_when_no_tasks() {
+        let (mut app, _dir) = app_with_tasks(0);
+        app.focused_panel = FocusedPanel::Tasks;
+
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn blocked_task_ids_populated_correctly() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Epic".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocker".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id,
+                title: "Blocked".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let app = App::new(db).unwrap();
+        assert!(app.blocked_task_ids.contains(&t2.id));
+        assert!(!app.blocked_task_ids.contains(&t1.id));
     }
 }
