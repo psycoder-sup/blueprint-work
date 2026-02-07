@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
             server.run().await?;
         }
         Commands::Tui => {
-            println!("Launching TUI... (not yet implemented)");
+            crate::tui::run()?;
         }
         Commands::Status { project } => {
             if let Some(name) = project {
