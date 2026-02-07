@@ -1,9 +1,10 @@
 mod app;
+mod theme;
 mod ui;
 
 pub use app::App;
 
-use std::io::{self, stdout};
+use std::io::stdout;
 use std::panic;
 
 use anyhow::Result;
@@ -36,7 +37,7 @@ pub fn run() -> Result<()> {
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(stdout(), LeaveAlternateScreen);
         original_hook(info);
     }));
 
