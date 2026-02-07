@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::models::ItemStatus;
+use crate::models::{ItemStatus, ProjectStatus};
 
 // ── Color palette ──────────────────────────────────────────────────
 
@@ -41,6 +41,13 @@ pub fn status_symbol(status: &ItemStatus) -> &'static str {
         ItemStatus::Todo => "■",
         ItemStatus::InProgress => "▶",
         ItemStatus::Done => "◉",
+    }
+}
+
+pub fn project_status_style(status: &ProjectStatus) -> Style {
+    match status {
+        ProjectStatus::Active => Style::default().fg(NEON_GREEN),
+        ProjectStatus::Archived => Style::default().fg(TEXT_DIM),
     }
 }
 
@@ -97,6 +104,15 @@ mod tests {
 
         let done_style = status_style(&ItemStatus::Done);
         assert_eq!(done_style.fg, Some(NEON_GREEN));
+    }
+
+    #[test]
+    fn project_status_style_returns_correct_fg() {
+        let active_style = project_status_style(&ProjectStatus::Active);
+        assert_eq!(active_style.fg, Some(NEON_GREEN));
+
+        let archived_style = project_status_style(&ProjectStatus::Archived);
+        assert_eq!(archived_style.fg, Some(TEXT_DIM));
     }
 
     #[test]

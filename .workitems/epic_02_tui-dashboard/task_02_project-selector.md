@@ -1,7 +1,7 @@
 ---
 id: TK-0202
 title: "Build Project Selector Panel"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: [TK-0201]
