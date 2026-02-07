@@ -1,7 +1,7 @@
 ---
 id: TK-0301
 title: "Implement Edge-Crossing Minimization"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0300]

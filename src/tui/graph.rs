@@ -103,13 +103,16 @@ impl DagLayout {
         // Assign layers via longest path.
         let layers = Self::assign_layers(&topo_order, &parents, &cycle_nodes, &mut node_map);
 
-        DagLayout {
+        let mut layout = DagLayout {
             nodes: node_map,
             edges: valid_edges,
             layers,
             orphans,
             cycle_nodes,
-        }
+        };
+
+        layout.minimize_crossings();
+        layout
     }
 
     /// Kahn's algorithm (BFS-based topological sort).
@@ -220,6 +223,115 @@ impl DagLayout {
         }
 
         layers
+    }
+
+    /// Minimize edge crossings using the barycenter heuristic.
+    ///
+    /// Performs multiple forward (top-to-bottom) and backward (bottom-to-top)
+    /// passes. In each pass, nodes within a layer are sorted by the average
+    /// x-position (barycenter) of their connected nodes in the adjacent layer.
+    /// Nodes with no connections to the adjacent layer retain their current
+    /// position. After reordering, each node's `x_position` is updated.
+    fn minimize_crossings(&mut self) {
+        if self.layers.len() < 2 {
+            self.assign_x_positions();
+            return;
+        }
+
+        // Build parent and child adjacency maps from edges.
+        let mut parents_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+        for edge in &self.edges {
+            children_map
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.to.clone());
+            parents_map
+                .entry(edge.to.clone())
+                .or_default()
+                .push(edge.from.clone());
+        }
+
+        // Run 3 iterations of forward + backward passes.
+        for _ in 0..3 {
+            // Forward pass: top-to-bottom (layer 1, 2, ..., n-1).
+            for layer_idx in 1..self.layers.len() {
+                self.sort_layer_by_barycenter(layer_idx, layer_idx - 1, &parents_map);
+            }
+
+            // Backward pass: bottom-to-top (layer n-2, n-3, ..., 0).
+            for layer_idx in (0..self.layers.len() - 1).rev() {
+                self.sort_layer_by_barycenter(layer_idx, layer_idx + 1, &children_map);
+            }
+        }
+
+        self.assign_x_positions();
+    }
+
+    /// Sort a layer's nodes by the barycenter of their neighbors in the
+    /// reference layer.
+    fn sort_layer_by_barycenter(
+        &mut self,
+        target_layer: usize,
+        ref_layer: usize,
+        adjacency: &HashMap<String, Vec<String>>,
+    ) {
+        // Build a position lookup for the reference layer.
+        let ref_positions: HashMap<&str, usize> = self.layers[ref_layer]
+            .iter()
+            .enumerate()
+            .map(|(pos, id)| (id.as_str(), pos))
+            .collect();
+
+        // Compute barycenters for each node in the target layer.
+        let mut barycenters: Vec<(String, f64)> = self.layers[target_layer]
+            .iter()
+            .enumerate()
+            .map(|(original_pos, node_id)| {
+                let bc = Self::compute_barycenter(node_id, adjacency, &ref_positions);
+                // Nodes with no connections keep their current position as barycenter.
+                let effective_bc = bc.unwrap_or(original_pos as f64);
+                (node_id.clone(), effective_bc)
+            })
+            .collect();
+
+        // Stable sort by barycenter to preserve relative order for equal values.
+        barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Update the layer with the new ordering.
+        self.layers[target_layer] = barycenters.into_iter().map(|(id, _)| id).collect();
+    }
+
+    /// Compute the barycenter (average position) of a node's neighbors in the
+    /// reference layer. Returns `None` if the node has no neighbors in that layer.
+    fn compute_barycenter(
+        node_id: &str,
+        adjacency: &HashMap<String, Vec<String>>,
+        ref_positions: &HashMap<&str, usize>,
+    ) -> Option<f64> {
+        let neighbors = adjacency.get(node_id)?;
+        let positions: Vec<f64> = neighbors
+            .iter()
+            .filter_map(|n| ref_positions.get(n.as_str()))
+            .map(|&pos| pos as f64)
+            .collect();
+
+        if positions.is_empty() {
+            return None;
+        }
+
+        Some(positions.iter().sum::<f64>() / positions.len() as f64)
+    }
+
+    /// Assign `x_position` to each node based on its index within its layer.
+    fn assign_x_positions(&mut self) {
+        for layer in &self.layers {
+            for (pos, node_id) in layer.iter().enumerate() {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.x_position = pos;
+                }
+            }
+        }
     }
 
     pub fn layer_count(&self) -> usize {
@@ -427,7 +539,7 @@ mod tests {
 
     #[test]
     fn deterministic_ordering_within_layers() {
-        // Multiple roots and children — should be alphabetically sorted within each layer.
+        // Multiple roots and children — ordering determined by barycenter.
         let layout = DagLayout::new(
             vec![node("C"), node("A"), node("B"), node("D"), node("E"), node("F")],
             vec![
@@ -442,5 +554,204 @@ mod tests {
         assert_eq!(layout.layer_count(), 2);
         assert_eq!(layout.layers[0], vec!["A", "B", "C"]);
         assert_eq!(layout.layers[1], vec!["D", "E", "F"]);
+    }
+
+    // ==================== Edge-crossing minimization tests ====================
+
+    /// Count the number of edge crossings between two adjacent layers.
+    fn count_crossings(layout: &DagLayout) -> usize {
+        let mut total = 0;
+
+        for layer_idx in 0..layout.layers.len().saturating_sub(1) {
+            let upper = &layout.layers[layer_idx];
+            let lower = &layout.layers[layer_idx + 1];
+
+            let upper_pos: HashMap<&str, usize> = upper
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (id.as_str(), i))
+                .collect();
+            let lower_pos: HashMap<&str, usize> = lower
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (id.as_str(), i))
+                .collect();
+
+            let mut edge_pairs: Vec<(usize, usize)> = Vec::new();
+            for e in &layout.edges {
+                if let (Some(&up), Some(&lp)) =
+                    (upper_pos.get(e.from.as_str()), lower_pos.get(e.to.as_str()))
+                {
+                    edge_pairs.push((up, lp));
+                }
+            }
+
+            for i in 0..edge_pairs.len() {
+                for j in (i + 1)..edge_pairs.len() {
+                    let (a, b) = edge_pairs[i];
+                    let (c, d) = edge_pairs[j];
+                    if (a < c && b > d) || (a > c && b < d) {
+                        total += 1;
+                    }
+                }
+            }
+        }
+
+        total
+    }
+
+    #[test]
+    fn barycenter_reduces_crossings() {
+        // Layer 0: [A, B], Layer 1: [C, D]
+        // Edges: A->D, B->C
+        // Alphabetical order in layer 1 = [C, D] causes 1 crossing.
+        // Barycenter: C parent B (pos 1), D parent A (pos 0).
+        // After sort: [D, C] -> 0 crossings.
+        let layout = DagLayout::new(
+            vec![node("A"), node("B"), node("C"), node("D")],
+            vec![edge("A", "D"), edge("B", "C")],
+        );
+
+        assert_eq!(layout.layer_count(), 2);
+        assert_eq!(layout.layers[0], vec!["A", "B"]);
+        assert_eq!(layout.layers[1], vec!["D", "C"]);
+        assert_eq!(count_crossings(&layout), 0);
+    }
+
+    #[test]
+    fn barycenter_diamond_no_crossings() {
+        let layout = DagLayout::new(
+            vec![node("A"), node("B"), node("C"), node("D")],
+            vec![
+                edge("A", "B"),
+                edge("A", "C"),
+                edge("B", "D"),
+                edge("C", "D"),
+            ],
+        );
+
+        assert_eq!(count_crossings(&layout), 0);
+    }
+
+    #[test]
+    fn barycenter_fan_out_no_crossings() {
+        let layout = DagLayout::new(
+            vec![node("A"), node("B"), node("C"), node("D")],
+            vec![edge("A", "B"), edge("A", "C"), edge("A", "D")],
+        );
+
+        assert_eq!(count_crossings(&layout), 0);
+    }
+
+    #[test]
+    fn barycenter_wide_graph_crossing_reduction() {
+        // Layer 0: [A, B, C], Layer 1: [D, E, F]
+        // Edges: A->F, B->E, C->D — maximum crossings alphabetically (3).
+        // After barycenter: [F, E, D] -> 0 crossings.
+        let layout = DagLayout::new(
+            vec![
+                node("A"), node("B"), node("C"),
+                node("D"), node("E"), node("F"),
+            ],
+            vec![edge("A", "F"), edge("B", "E"), edge("C", "D")],
+        );
+
+        assert_eq!(layout.layer_count(), 2);
+        assert_eq!(layout.layers[0], vec!["A", "B", "C"]);
+        assert_eq!(layout.layers[1], vec!["F", "E", "D"]);
+        assert_eq!(count_crossings(&layout), 0);
+    }
+
+    #[test]
+    fn x_positions_assigned_after_minimization() {
+        let layout = DagLayout::new(
+            vec![node("A"), node("B"), node("C"), node("D")],
+            vec![edge("A", "D"), edge("B", "C")],
+        );
+
+        assert_eq!(layout.nodes["A"].x_position, 0);
+        assert_eq!(layout.nodes["B"].x_position, 1);
+        assert_eq!(layout.nodes["D"].x_position, 0);
+        assert_eq!(layout.nodes["C"].x_position, 1);
+    }
+
+    #[test]
+    fn crossing_count_comparison() {
+        // P->U, Q->T, R->S — maximum crossings alphabetically (3).
+        // After barycenter: [U, T, S] -> 0 crossings.
+        let layout = DagLayout::new(
+            vec![
+                node("P"), node("Q"), node("R"),
+                node("S"), node("T"), node("U"),
+            ],
+            vec![edge("P", "U"), edge("Q", "T"), edge("R", "S")],
+        );
+
+        assert_eq!(count_crossings(&layout), 0);
+        assert_eq!(layout.layers[1], vec!["U", "T", "S"]);
+    }
+
+    #[test]
+    fn multi_layer_crossing_reduction() {
+        // Three layers: A->D, B->C, C->F, D->E
+        let layout = DagLayout::new(
+            vec![
+                node("A"), node("B"), node("C"),
+                node("D"), node("E"), node("F"),
+            ],
+            vec![
+                edge("A", "D"),
+                edge("B", "C"),
+                edge("C", "F"),
+                edge("D", "E"),
+            ],
+        );
+
+        assert_eq!(layout.layer_count(), 3);
+        assert_eq!(count_crossings(&layout), 0);
+    }
+
+    #[test]
+    fn no_connection_nodes_retain_position() {
+        let layout = DagLayout::new(
+            vec![
+                node("A"), node("B"),
+                node("C"), node("D"), node("E"),
+            ],
+            vec![
+                edge("A", "C"),
+                edge("A", "D"),
+                edge("A", "E"),
+                edge("B", "D"),
+            ],
+        );
+
+        for layer in &layout.layers {
+            for (pos, node_id) in layer.iter().enumerate() {
+                assert_eq!(layout.nodes[node_id].x_position, pos);
+            }
+        }
+    }
+
+    #[test]
+    fn backward_pass_improves_upper_layers() {
+        let layout = DagLayout::new(
+            vec![
+                node("A"), node("B"), node("C"),
+                node("D"),
+                node("E"), node("F"), node("G"),
+            ],
+            vec![
+                edge("A", "D"),
+                edge("B", "D"),
+                edge("C", "D"),
+                edge("D", "E"),
+                edge("D", "F"),
+                edge("D", "G"),
+            ],
+        );
+
+        assert_eq!(layout.layer_count(), 3);
+        assert_eq!(count_crossings(&layout), 0);
     }
 }
