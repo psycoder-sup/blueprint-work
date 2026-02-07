@@ -1,7 +1,7 @@
 ---
 id: TK-0300
 title: "Implement DAG Topological Sort & Layer Assignment"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: []

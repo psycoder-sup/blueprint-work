@@ -6,7 +6,7 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 
 ## Status
 
-`todo`
+`in-progress`
 
 ## Dependencies
 
@@ -26,7 +26,7 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 
 | # | Task | Status |
 |---|------|--------|
-| 00 | Implement DAG topological sort & layer assignment | todo |
+| 00 | Implement DAG topological sort & layer assignment | done |
 | 01 | Implement edge-crossing minimization | todo |
 | 02 | Build ASCII box-node renderer | todo |
 | 03 | Implement animated marching dotted border | todo |
