@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Stdout;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -11,6 +11,10 @@ use crate::db::Database;
 use crate::db::dependency::{get_blockers, is_blocked};
 use crate::db::epic::list_epics;
 use crate::db::project::list_projects;
+use crate::db::status::{
+    DependencyDisplayRow, count_epics_by_status, count_tasks_by_status, get_blocked_items,
+    get_dependency_display_rows, get_max_updated_at,
+};
 use crate::db::task::{get_task, list_tasks, update_task};
 use crate::models::{BlueTask, DependencyType, Epic, ItemStatus, Project, UpdateTaskInput};
 use crate::tui::ui;
@@ -20,12 +24,15 @@ pub enum InputMode {
     Normal,
     ProjectSelector,
     TaskDetail,
+    HelpOverlay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPanel {
     Epics,
     Tasks,
+    Dependencies,
+    Status,
 }
 
 pub struct App {
@@ -44,6 +51,12 @@ pub struct App {
     pub blocked_task_ids: HashSet<String>,
     /// Cached blocker names per task ID, computed in `refresh_tasks()`.
     pub task_blocker_names: HashMap<String, Vec<String>>,
+    pub epic_status_counts: HashMap<String, i64>,
+    pub task_status_counts: HashMap<String, i64>,
+    pub blocked_count: usize,
+    pub dep_display_rows: Vec<DependencyDisplayRow>,
+    pub last_refresh: Instant,
+    pub last_db_watermark: String,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -71,6 +84,12 @@ impl App {
             selected_task_idx: 0,
             blocked_task_ids: HashSet::new(),
             task_blocker_names: HashMap::new(),
+            epic_status_counts: HashMap::new(),
+            task_status_counts: HashMap::new(),
+            blocked_count: 0,
+            dep_display_rows: Vec::new(),
+            last_refresh: Instant::now(),
+            last_db_watermark: String::new(),
         };
         app.refresh_data();
         Ok(app)
@@ -87,8 +106,23 @@ impl App {
                     }
                 }
             }
+
+            // Auto-refresh: poll DB for changes every ~1 second
+            if self.last_refresh.elapsed() >= Duration::from_secs(1) {
+                self.check_for_db_changes();
+            }
         }
         Ok(())
+    }
+
+    /// Check if the database has changed since our last refresh, and reload if so.
+    fn check_for_db_changes(&mut self) {
+        let watermark = get_max_updated_at(&self.db).unwrap_or_default();
+        if watermark != self.last_db_watermark {
+            self.refresh_data();
+        } else {
+            self.last_refresh = Instant::now();
+        }
     }
 
     /// Returns the currently selected project, if any.
@@ -119,6 +153,21 @@ impl App {
             .collect();
 
         self.refresh_tasks();
+        self.refresh_status_and_deps();
+    }
+
+    fn refresh_status_and_deps(&mut self) {
+        let pid = self.selected_project().map(|p| p.id.clone());
+        let pid = pid.as_deref();
+
+        self.epic_status_counts = count_epics_by_status(&self.db, pid).unwrap_or_default();
+        self.task_status_counts = count_tasks_by_status(&self.db, pid).unwrap_or_default();
+        self.blocked_count = get_blocked_items(&self.db, pid)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        self.dep_display_rows = get_dependency_display_rows(&self.db, pid).unwrap_or_default();
+        self.last_db_watermark = get_max_updated_at(&self.db).unwrap_or_default();
+        self.last_refresh = Instant::now();
     }
 
     pub fn refresh_tasks(&mut self) {
@@ -164,6 +213,7 @@ impl App {
             InputMode::Normal => self.handle_normal_key(key),
             InputMode::ProjectSelector => self.handle_selector_key(key),
             InputMode::TaskDetail => self.handle_task_detail_key(key),
+            InputMode::HelpOverlay => self.handle_help_key(key),
         }
     }
 
@@ -171,9 +221,13 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('p') => self.open_project_selector(),
+            KeyCode::Char('?') => self.mode = InputMode::HelpOverlay,
+            KeyCode::Char('d') => { /* TODO: toggle dependency graph view (epic_03) */ }
             KeyCode::Tab => self.toggle_focus(),
-            KeyCode::Char('j') | KeyCode::Down => self.navigate_down(),
-            KeyCode::Char('k') | KeyCode::Up => self.navigate_up(),
+            KeyCode::Char('h') | KeyCode::Left => self.focus_left(),
+            KeyCode::Char('l') | KeyCode::Right => self.focus_right(),
+            KeyCode::Char('j') | KeyCode::Down => self.navigate(1),
+            KeyCode::Char('k') | KeyCode::Up => self.navigate(-1),
             KeyCode::Char('s') if self.focused_panel == FocusedPanel::Tasks => {
                 self.cycle_task_status();
             }
@@ -182,6 +236,15 @@ impl App {
                     && self.selected_task().is_some() =>
             {
                 self.mode = InputMode::TaskDetail;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.mode = InputMode::Normal;
             }
             _ => {}
         }
@@ -199,16 +262,27 @@ impl App {
     fn toggle_focus(&mut self) {
         self.focused_panel = match self.focused_panel {
             FocusedPanel::Epics => FocusedPanel::Tasks,
-            FocusedPanel::Tasks => FocusedPanel::Epics,
+            FocusedPanel::Tasks => FocusedPanel::Dependencies,
+            FocusedPanel::Dependencies => FocusedPanel::Status,
+            FocusedPanel::Status => FocusedPanel::Epics,
         };
     }
 
-    fn navigate_down(&mut self) {
-        self.navigate(1);
+    /// Switch focus between left/right panels on the same row.
+    fn focus_left(&mut self) {
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::Tasks => FocusedPanel::Epics,
+            FocusedPanel::Status => FocusedPanel::Dependencies,
+            other => other,
+        };
     }
 
-    fn navigate_up(&mut self) {
-        self.navigate(-1);
+    fn focus_right(&mut self) {
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::Epics => FocusedPanel::Tasks,
+            FocusedPanel::Dependencies => FocusedPanel::Status,
+            other => other,
+        };
     }
 
     /// Moves the selection cursor by `delta` (+1 for down, -1 for up) in the
@@ -226,6 +300,9 @@ impl App {
                 if let Some(next) = wrap_index(self.selected_task_idx, self.tasks.len(), delta) {
                     self.selected_task_idx = next;
                 }
+            }
+            FocusedPanel::Dependencies | FocusedPanel::Status => {
+                // Bottom panels don't have navigable items
             }
         }
     }
@@ -599,12 +676,18 @@ mod tests {
     }
 
     #[test]
-    fn tab_toggles_focused_panel() {
+    fn tab_cycles_through_all_panels() {
         let (mut app, _dir) = app_with_tasks(1);
         assert_eq!(app.focused_panel, FocusedPanel::Epics);
 
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         assert_eq!(app.focused_panel, FocusedPanel::Tasks);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focused_panel, FocusedPanel::Dependencies);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focused_panel, FocusedPanel::Status);
 
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         assert_eq!(app.focused_panel, FocusedPanel::Epics);
@@ -778,5 +861,278 @@ mod tests {
         let app = App::new(db).unwrap();
         assert!(app.blocked_task_ids.contains(&t2.id));
         assert!(!app.blocked_task_ids.contains(&t1.id));
+    }
+
+    #[test]
+    fn test_status_counts_populated() {
+        let (db, dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic1 = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic 1".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic2 = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic 2".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        // Mark epic2 as in_progress
+        crate::db::epic::update_epic(
+            &db,
+            &epic2.id,
+            crate::models::UpdateEpicInput {
+                status: Some(ItemStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Create tasks in various statuses
+        let _t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic1.id.clone(),
+                title: "Task todo".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic1.id.clone(),
+                title: "Task in_progress".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t3 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic1.id.clone(),
+                title: "Task done".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        update_task(
+            &db,
+            &t2.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        update_task(
+            &db,
+            &t3.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let app = App::new(db).unwrap();
+
+        // Epic counts: 1 todo, 1 in_progress, 0 done
+        assert_eq!(app.epic_status_counts["todo"], 1);
+        assert_eq!(app.epic_status_counts["in_progress"], 1);
+        assert_eq!(app.epic_status_counts["done"], 0);
+
+        // Task counts: 1 todo, 1 in_progress, 1 done
+        assert_eq!(app.task_status_counts["todo"], 1);
+        assert_eq!(app.task_status_counts["in_progress"], 1);
+        assert_eq!(app.task_status_counts["done"], 1);
+
+        drop(dir);
+    }
+
+    #[test]
+    fn test_blocked_count_populated() {
+        let (db, dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "E".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocker".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocked".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let app = App::new(db).unwrap();
+        assert_eq!(app.blocked_count, 1);
+
+        drop(dir);
+    }
+
+    #[test]
+    fn test_check_for_db_changes_refreshes_on_change() {
+        let (db, dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "E".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task 1".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+
+        // Verify initial status is todo
+        assert_eq!(app.tasks[0].status, ItemStatus::Todo);
+        assert_eq!(app.task_status_counts["todo"], 1);
+        assert_eq!(app.task_status_counts["in_progress"], 0);
+
+        // Bypass the app and update the task directly in the DB, using a future
+        // timestamp so the watermark is guaranteed to change even within the
+        // same second.
+        app.db
+            .conn()
+            .execute(
+                "UPDATE tasks SET status = 'in_progress', updated_at = datetime('now', '+1 minute') WHERE id = ?1",
+                [&t1.id],
+            )
+            .unwrap();
+
+        // Set last_refresh to the past so the watermark check triggers
+        app.last_refresh = Instant::now() - Duration::from_secs(2);
+
+        // This should detect the watermark change and refresh
+        app.check_for_db_changes();
+
+        // Verify the app state was refreshed
+        assert_eq!(app.task_status_counts["in_progress"], 1);
+
+        drop(dir);
+    }
+
+    #[test]
+    fn h_l_switches_left_right_panels() {
+        let (mut app, _dir) = app_with_tasks(1);
+
+        // Start at Epics (top-left), 'l' moves to Tasks (top-right)
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.focused_panel, FocusedPanel::Tasks);
+
+        // 'h' moves Tasks back to Epics
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+
+        // 'h' on Epics stays on Epics (no panel to the left)
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.focused_panel, FocusedPanel::Epics);
+
+        // 'l' on Tasks stays on Tasks (no panel to the right)
+        app.focused_panel = FocusedPanel::Tasks;
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.focused_panel, FocusedPanel::Tasks);
+
+        // Bottom row: Status -> Dependencies via 'h'
+        app.focused_panel = FocusedPanel::Status;
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.focused_panel, FocusedPanel::Dependencies);
+
+        // Bottom row: Dependencies -> Status via 'l'
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.focused_panel, FocusedPanel::Status);
+    }
+
+    #[test]
+    fn question_mark_opens_help_overlay() {
+        let (mut app, _dir) = app_with_tasks(1);
+        assert_eq!(app.mode, InputMode::Normal);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert_eq!(app.mode, InputMode::HelpOverlay);
+    }
+
+    #[test]
+    fn esc_closes_help_overlay() {
+        let (mut app, _dir) = app_with_tasks(1);
+
+        // Open the help overlay
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert_eq!(app.mode, InputMode::HelpOverlay);
+
+        // Esc closes it back to Normal
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.mode, InputMode::Normal);
     }
 }

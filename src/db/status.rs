@@ -11,6 +11,30 @@ pub struct BlockedItemRow {
     pub blocker_id: String,
 }
 
+pub struct DependencyDisplayRow {
+    pub blocker_title: String,
+    pub blocked_title: String,
+    pub is_active: bool,
+}
+
+/// Builds the SQL and params for a query that optionally filters by project ID.
+/// `base_sql` is the shared prefix, `filter_suffix` is appended when a project ID is provided,
+/// and `unfiltered_suffix` is appended otherwise.
+fn build_filtered_query(
+    base_sql: &str,
+    filter_suffix: &str,
+    unfiltered_suffix: &str,
+    project_id: Option<&str>,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    match project_id {
+        Some(pid) => (
+            format!("{base_sql}{filter_suffix}"),
+            vec![Box::new(pid.to_string())],
+        ),
+        None => (format!("{base_sql}{unfiltered_suffix}"), vec![]),
+    }
+}
+
 /// Count rows grouped by status, ensuring all three status keys are present.
 fn count_by_status(
     db: &Database,
@@ -71,6 +95,14 @@ pub fn count_tasks_by_status(
     )
 }
 
+/// SQL suffix to filter dependencies by project ownership.
+const PROJECT_FILTER_SUFFIX: &str = " \
+    AND ( \
+        (d.blocked_type = 'epic' AND blocked_e.project_id = ?1) \
+        OR (d.blocked_type = 'task' AND blocked_t.epic_id IN \
+            (SELECT id FROM epics WHERE project_id = ?1)) \
+    )";
+
 pub fn get_blocked_items(
     db: &Database,
     project_id: Option<&str>,
@@ -91,23 +123,13 @@ pub fn get_blocked_items(
         ) \
         AND (blocked_e.id IS NOT NULL OR blocked_t.id IS NOT NULL)";
 
-    let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
-        Some(pid) => {
-            let filter = format!(
-                "{base} \
-                 AND ( \
-                     (d.blocked_type = 'epic' AND blocked_e.project_id = ?1) \
-                     OR (d.blocked_type = 'task' AND blocked_t.epic_id IN (SELECT id FROM epics WHERE project_id = ?1)) \
-                 ) \
-                 ORDER BY d.blocked_type, d.blocked_id"
-            );
-            (filter, vec![Box::new(pid.to_string())])
-        }
-        None => (
-            format!("{base} ORDER BY d.blocked_type, d.blocked_id"),
-            vec![],
-        ),
-    };
+    let order = " ORDER BY d.blocked_type, d.blocked_id";
+    let (sql, params) = build_filtered_query(
+        base,
+        &format!("{PROJECT_FILTER_SUFFIX}{order}"),
+        order,
+        project_id,
+    );
 
     let mut stmt = db.conn().prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
@@ -121,6 +143,61 @@ pub fn get_blocked_items(
 
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to query blocked items")
+}
+
+pub fn get_dependency_display_rows(
+    db: &Database,
+    project_id: Option<&str>,
+) -> Result<Vec<DependencyDisplayRow>> {
+    let base = "\
+        SELECT \
+            COALESCE(blocker_e.title, blocker_t.title) as blocker_title, \
+            COALESCE(blocked_e.title, blocked_t.title) as blocked_title, \
+            CASE WHEN ( \
+                (blocker_e.id IS NOT NULL AND blocker_e.status != 'done') \
+                OR (blocker_t.id IS NOT NULL AND blocker_t.status != 'done') \
+            ) THEN 1 ELSE 0 END as is_active \
+        FROM dependencies d \
+        LEFT JOIN epics blocker_e ON d.blocker_type = 'epic' AND d.blocker_id = blocker_e.id \
+        LEFT JOIN tasks blocker_t ON d.blocker_type = 'task' AND d.blocker_id = blocker_t.id \
+        LEFT JOIN epics blocked_e ON d.blocked_type = 'epic' AND d.blocked_id = blocked_e.id \
+        LEFT JOIN tasks blocked_t ON d.blocked_type = 'task' AND d.blocked_id = blocked_t.id \
+        WHERE (blocked_e.id IS NOT NULL OR blocked_t.id IS NOT NULL) \
+        AND (blocker_e.id IS NOT NULL OR blocker_t.id IS NOT NULL)";
+
+    let order = " ORDER BY is_active DESC LIMIT 5";
+    let (sql, params) = build_filtered_query(
+        base,
+        &format!("{PROJECT_FILTER_SUFFIX}{order}"),
+        order,
+        project_id,
+    );
+
+    let mut stmt = db.conn().prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        Ok(DependencyDisplayRow {
+            blocker_title: row.get(0)?,
+            blocked_title: row.get(1)?,
+            is_active: row.get::<_, i64>(2)? != 0,
+        })
+    })?;
+
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to query dependency display rows")
+}
+
+pub fn get_max_updated_at(db: &Database) -> Result<String> {
+    let sql = "\
+        SELECT COALESCE(MAX(ts), '') || ':' || dep_count FROM ( \
+            SELECT MAX(updated_at) as ts FROM projects \
+            UNION ALL \
+            SELECT MAX(updated_at) as ts FROM epics \
+            UNION ALL \
+            SELECT MAX(updated_at) as ts FROM tasks \
+        ), (SELECT CAST(COUNT(*) AS TEXT) as dep_count FROM dependencies)";
+    db.conn()
+        .query_row(sql, [], |row| row.get(0))
+        .context("failed to query max updated_at")
 }
 
 #[cfg(test)]
@@ -404,6 +481,160 @@ mod tests {
         assert_eq!(blocked[0].item_id, t2.id);
         assert_eq!(blocked[0].title, "Blocked");
         assert_eq!(blocked[0].blocker_id, t1.id);
+    }
+
+    #[test]
+    fn test_get_dependency_display_rows_empty() {
+        let (db, _dir) = open_temp_db();
+        let rows = get_dependency_display_rows(&db, None).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_get_dependency_display_rows_with_active_block() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "E".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocker Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocked Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let rows = get_dependency_display_rows(&db, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].blocker_title, "Blocker Task");
+        assert_eq!(rows[0].blocked_title, "Blocked Task");
+        assert!(rows[0].is_active);
+    }
+
+    #[test]
+    fn test_get_dependency_display_rows_resolved_block() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "E".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocker Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Blocked Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2.id.clone(),
+            },
+        )
+        .unwrap();
+
+        // Mark blocker as done
+        update_task(
+            &db,
+            &t1.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = get_dependency_display_rows(&db, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].is_active);
+    }
+
+    #[test]
+    fn test_get_max_updated_at_empty() {
+        let (db, _dir) = open_temp_db();
+        let result = get_max_updated_at(&db).unwrap();
+        // Empty DB returns ":0" (no timestamps, zero dependencies)
+        assert_eq!(result, ":0");
+    }
+
+    #[test]
+    fn test_get_max_updated_at_with_data() {
+        let (db, _dir) = open_temp_db();
+        create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let result = get_max_updated_at(&db).unwrap();
+        assert!(!result.is_empty());
     }
 
     #[test]

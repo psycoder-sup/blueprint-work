@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -45,22 +47,34 @@ pub fn draw(frame: &mut Frame, app: &App) {
     );
     frame.render_widget(header, chunks[0]);
 
-    // Body: Epics (left) and Tasks (right)
-    let body_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    // Body: 2x2 grid
+    let body_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
         .split(chunks[1]);
 
-    draw_epic_list(frame, app, body_chunks[0]);
-    draw_task_list(frame, app, body_chunks[1]);
+    let top_panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(body_rows[0]);
+
+    let bottom_panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(body_rows[1]);
+
+    draw_epic_list(frame, app, top_panels[0]);
+    draw_task_list(frame, app, top_panels[1]);
+    draw_deps_panel(frame, app, bottom_panels[0]);
+    draw_status_panel(frame, app, bottom_panels[1]);
 
     // Footer
     let help_text = match app.mode {
         InputMode::Normal => {
-            "  q: Quit  p: Projects  Tab: Focus  j/k: Navigate  s: Status  Enter: Detail"
+            "  q: Quit  p: Projects  Tab: Focus  h/l: Left/Right  j/k: Navigate  s: Status  ?: Help"
         }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
-        InputMode::TaskDetail => "  Esc: Close",
+        InputMode::TaskDetail | InputMode::HelpOverlay => "  Esc: Close",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -82,6 +96,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.mode {
         InputMode::ProjectSelector => draw_project_selector(frame, app),
         InputMode::TaskDetail => draw_task_detail(frame, app),
+        InputMode::HelpOverlay => draw_help_overlay(frame),
         InputMode::Normal => {}
     }
 }
@@ -293,8 +308,7 @@ fn draw_project_selector(frame: &mut Frame, app: &App) {
             let line = Line::from(vec![
                 Span::styled(marker, marker_style),
                 Span::styled(&project.name, title_style),
-                Span::styled(" ", Style::default()),
-                Span::styled(format!("[{}]", project.status), status_style),
+                Span::styled(format!(" [{}]", project.status), status_style),
             ]);
 
             ListItem::new(line)
@@ -303,4 +317,158 @@ fn draw_project_selector(frame: &mut Frame, app: &App) {
 
     let list = List::new(list_items).block(panel_block(" Select Project ", true));
     frame.render_widget(list, area);
+}
+
+/// Builds a styled progress line like "  Label: ████░░ 3/10".
+fn progress_line(label: &str, counts: &HashMap<String, i64>, area_width: u16) -> Line<'static> {
+    let done = *counts.get("done").unwrap_or(&0) as usize;
+    let total = counts.values().sum::<i64>() as usize;
+
+    let count_text = format!(" {done}/{total}");
+    // "  Label: " (2 indent + label + ": ") + count_text + borders (2)
+    let label_str = format!("  {label}: ");
+    let bar_width = area_width
+        .saturating_sub(label_str.len() as u16 + count_text.len() as u16 + 2)
+        as usize;
+
+    let bar = theme::progress_bar(done, total, bar_width.max(1));
+    let filled: String = bar.chars().filter(|&c| c == '\u{2588}').collect();
+    let remaining: String = bar.chars().filter(|&c| c == '\u{2591}').collect();
+
+    Line::from(vec![
+        Span::styled(label_str, Style::default().fg(theme::TEXT_BRIGHT)),
+        Span::styled(filled, Style::default().fg(theme::NEON_GREEN)),
+        Span::styled(remaining, Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(count_text, Style::default().fg(theme::TEXT_DIM)),
+    ])
+}
+
+fn draw_status_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focused_panel == FocusedPanel::Status;
+
+    let blocked_style = if app.blocked_count > 0 {
+        Style::default().fg(theme::NEON_ORANGE)
+    } else {
+        Style::default().fg(theme::TEXT_DIM)
+    };
+
+    let lines = vec![
+        progress_line("Epics", &app.epic_status_counts, area.width),
+        progress_line("Tasks", &app.task_status_counts, area.width),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Blocked: {} items", app.blocked_count),
+            blocked_style,
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(panel_block(" Project Status ", focused));
+    frame.render_widget(paragraph, area);
+}
+
+/// Truncates `text` to at most `max_chars`, appending an ellipsis if truncated.
+fn truncate(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{truncated}\u{2026}")
+}
+
+fn draw_deps_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focused_panel == FocusedPanel::Dependencies;
+    let block = panel_block(" Dependencies (mini) ", focused);
+
+    if app.dep_display_rows.is_empty() {
+        let paragraph = Paragraph::new("No dependencies")
+            .style(Style::default().fg(theme::TEXT_DIM))
+            .block(block);
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let arrow = " \u{2500}\u{2500}blocks\u{2500}\u{2500}\u{25b6} ";
+    let arrow_len = arrow.chars().count();
+
+    let mut lines: Vec<Line> = app
+        .dep_display_rows
+        .iter()
+        .take(5)
+        .map(|row| {
+            let color = if row.is_active {
+                theme::NEON_PINK
+            } else {
+                theme::NEON_CYAN
+            };
+            let style = Style::default().fg(color);
+
+            let available = inner_width.saturating_sub(arrow_len);
+            let half = available / 2;
+            let blocker = truncate(&row.blocker_title, half);
+            let remaining = inner_width.saturating_sub(blocker.chars().count() + arrow_len);
+            let blocked = truncate(&row.blocked_title, remaining);
+
+            Line::from(vec![
+                Span::styled(blocker, style),
+                Span::styled(arrow, style),
+                Span::styled(blocked, style),
+            ])
+        })
+        .collect();
+
+    lines.push(Line::from(vec![
+        Span::styled("[d]", Style::default().fg(theme::NEON_CYAN)),
+        Span::styled(
+            " Full Dependency Graph",
+            Style::default().fg(theme::TEXT_DIM),
+        ),
+    ]));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_help_overlay(frame: &mut Frame) {
+    let area = centered_rect(60, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let title_style = Style::default()
+        .fg(theme::NEON_CYAN)
+        .add_modifier(Modifier::BOLD);
+    let section_style = Style::default()
+        .fg(theme::NEON_MAGENTA)
+        .add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(theme::NEON_GREEN);
+    let desc_style = Style::default().fg(theme::TEXT_DIM);
+
+    let key_line = |key: &'static str, desc: &'static str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("   {key:<14}"), key_style),
+            Span::styled(desc, desc_style),
+        ])
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(" KEYBOARD SHORTCUTS", title_style)),
+        Line::from(""),
+        Line::from(Span::styled(" Navigation", section_style)),
+        key_line("j/k, \u{2191}/\u{2193}", "Move up/down in active panel"),
+        key_line("h/l, \u{2190}/\u{2192}", "Switch left/right between panels"),
+        key_line("Tab", "Cycle through all panels"),
+        Line::from(""),
+        Line::from(Span::styled(" Actions", section_style)),
+        key_line("Enter", "Open task detail"),
+        key_line("s", "Cycle task status (todo \u{2192} in_progress \u{2192} done)"),
+        key_line("p", "Open project selector"),
+        key_line("d", "Toggle dependency graph view"),
+        Line::from(""),
+        Line::from(Span::styled(" General", section_style)),
+        key_line("?", "Toggle this help overlay"),
+        key_line("q", "Quit / Close overlay"),
+        key_line("Esc", "Close overlay/popup"),
+    ];
+
+    let help = Paragraph::new(lines).block(panel_block(" Help ", true));
+    frame.render_widget(help, area);
 }
