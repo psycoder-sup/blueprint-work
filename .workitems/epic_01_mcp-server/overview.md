@@ -6,7 +6,7 @@ Implement the stdio-based MCP (Model Context Protocol) server. This is the core 
 
 ## Status
 
-`in-progress`
+`done`
 
 ## Dependencies
 
