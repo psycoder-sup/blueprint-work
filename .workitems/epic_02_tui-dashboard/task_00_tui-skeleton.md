@@ -1,12 +1,12 @@
 ---
 id: TK-0200
 title: "Create Ratatui App Skeleton with Event Loop"
-status: TODO
+status: DONE
 epic: 2
 priority: medium
 dependencies: []
 blockers: []
-commits: []
+commits: [8cbe24c, 6181656]
 pr: ""
 ---
 
