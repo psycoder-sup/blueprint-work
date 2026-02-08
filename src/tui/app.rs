@@ -8,7 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::db::Database;
-use crate::db::dependency::{get_blockers, is_blocked};
+use crate::db::dependency::{get_blocked_by, get_blockers, is_blocked};
 use crate::db::epic::list_epics;
 use crate::db::project::list_projects;
 use crate::db::status::{
@@ -17,6 +17,8 @@ use crate::db::status::{
 };
 use crate::db::task::{get_task, list_tasks, update_task};
 use crate::models::{BlueTask, DependencyType, Epic, ItemStatus, Project, UpdateTaskInput};
+use crate::tui::graph::{DagLayout, Edge, Node};
+use crate::tui::graph_render::{NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK, NODE_WIDTH};
 use crate::tui::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,20 @@ pub enum InputMode {
     ProjectSelector,
     TaskDetail,
     HelpOverlay,
+    GraphView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphLevel {
+    Epic,
+    Task,
+}
+
+/// Cached graph layout data (recomputed only when data changes).
+pub struct GraphCache {
+    pub layout: DagLayout,
+    pub node_positions: HashMap<String, (usize, usize)>,
+    pub level: GraphLevel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +77,8 @@ pub struct App {
     pub animation_frame: u8,
     /// Tick counter to derive animation frame from the 100ms poll interval.
     animation_tick: u8,
+    pub graph_mode: GraphLevel,
+    pub graph_cache: Option<GraphCache>,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -69,6 +87,42 @@ fn wrap_index(current: usize, len: usize, delta: isize) -> Option<usize> {
         return None;
     }
     Some(((current as isize + delta).rem_euclid(len as isize)) as usize)
+}
+
+/// Build a [`GraphCache`] from a set of nodes, edges, and the node height used
+/// for vertical spacing. This is the shared logic behind both epic and task
+/// graph construction.
+fn build_graph_cache(
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
+    node_height: usize,
+    level: GraphLevel,
+) -> GraphCache {
+    let layout = DagLayout::new(nodes, edges);
+
+    let h_spacing = NODE_WIDTH + 4;
+    let v_spacing = node_height + 2;
+
+    let mut node_positions = HashMap::new();
+
+    for (layer_idx, layer) in layout.layers.iter().enumerate() {
+        for (x_idx, node_id) in layer.iter().enumerate() {
+            node_positions.insert(node_id.clone(), (x_idx * h_spacing, layer_idx * v_spacing));
+        }
+    }
+
+    if !layout.orphans.is_empty() {
+        let orphan_y = layout.layers.len() * v_spacing;
+        for (x_idx, node_id) in layout.orphans.iter().enumerate() {
+            node_positions.insert(node_id.clone(), (x_idx * h_spacing, orphan_y));
+        }
+    }
+
+    GraphCache {
+        layout,
+        node_positions,
+        level,
+    }
 }
 
 impl App {
@@ -96,6 +150,8 @@ impl App {
             last_db_watermark: String::new(),
             animation_frame: 0,
             animation_tick: 0,
+            graph_mode: GraphLevel::Epic,
+            graph_cache: None,
         };
         app.refresh_data();
         Ok(app)
@@ -167,6 +223,9 @@ impl App {
 
         self.refresh_tasks();
         self.refresh_status_and_deps();
+
+        // Invalidate graph cache so it gets rebuilt on next draw
+        self.graph_cache = None;
     }
 
     fn refresh_status_and_deps(&mut self) {
@@ -227,6 +286,7 @@ impl App {
             InputMode::ProjectSelector => self.handle_selector_key(key),
             InputMode::TaskDetail => self.handle_task_detail_key(key),
             InputMode::HelpOverlay => self.handle_help_key(key),
+            InputMode::GraphView => self.handle_graph_key(key),
         }
     }
 
@@ -235,7 +295,11 @@ impl App {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('p') => self.open_project_selector(),
             KeyCode::Char('?') => self.mode = InputMode::HelpOverlay,
-            KeyCode::Char('d') => { /* TODO: toggle dependency graph view (epic_03) */ }
+            KeyCode::Char('d') => {
+                self.graph_mode = GraphLevel::Epic;
+                self.build_epic_graph();
+                self.mode = InputMode::GraphView;
+            }
             KeyCode::Tab => self.toggle_focus(),
             KeyCode::Char('h') | KeyCode::Left => self.focus_left(),
             KeyCode::Char('l') | KeyCode::Right => self.focus_right(),
@@ -270,6 +334,94 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn handle_graph_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = InputMode::Normal;
+            }
+            KeyCode::Char('1') => {
+                if self.graph_mode != GraphLevel::Epic {
+                    self.graph_mode = GraphLevel::Epic;
+                    self.build_epic_graph();
+                }
+            }
+            KeyCode::Char('2') => {
+                self.graph_mode = GraphLevel::Task;
+                self.build_task_graph();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn build_epic_graph(&mut self) {
+        let nodes: Vec<Node> = self
+            .epics
+            .iter()
+            .map(|e| Node {
+                id: e.id.clone(),
+                label: e.title.clone(),
+                status: e.status.clone(),
+                layer: None,
+                x_position: 0,
+            })
+            .collect();
+
+        let edges = self.collect_dependency_edges(
+            self.epics.iter().map(|e| &e.id),
+            &DependencyType::Epic,
+        );
+
+        self.graph_cache = Some(build_graph_cache(nodes, edges, NODE_HEIGHT_EPIC, GraphLevel::Epic));
+    }
+
+    pub fn build_task_graph(&mut self) {
+        if self.selected_epic().is_none() {
+            self.graph_cache = None;
+            return;
+        }
+
+        let nodes: Vec<Node> = self
+            .tasks
+            .iter()
+            .map(|t| Node {
+                id: t.id.clone(),
+                label: t.title.clone(),
+                status: t.status.clone(),
+                layer: None,
+                x_position: 0,
+            })
+            .collect();
+
+        let edges = self.collect_dependency_edges(
+            self.tasks.iter().map(|t| &t.id),
+            &DependencyType::Task,
+        );
+
+        self.graph_cache = Some(build_graph_cache(nodes, edges, NODE_HEIGHT_TASK, GraphLevel::Task));
+    }
+
+    /// Collect outgoing dependency edges for the given item IDs and type.
+    fn collect_dependency_edges<'a>(
+        &self,
+        item_ids: impl Iterator<Item = &'a String>,
+        dep_type: &DependencyType,
+    ) -> Vec<Edge> {
+        let mut edges = Vec::new();
+        for id in item_ids {
+            if let Ok(deps) = get_blocked_by(&self.db, dep_type, id) {
+                for dep in deps {
+                    if &dep.blocked_type == dep_type {
+                        edges.push(Edge {
+                            from: id.clone(),
+                            to: dep.blocked_id,
+                        });
+                    }
+                }
+            }
+        }
+        edges
     }
 
     fn toggle_focus(&mut self) {
@@ -1147,5 +1299,256 @@ mod tests {
         // Esc closes it back to Normal
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn d_switches_to_graph_view() {
+        let (mut app, _dir) = app_with_epics(2);
+        assert_eq!(app.mode, InputMode::Normal);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.mode, InputMode::GraphView);
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+        assert!(app.graph_cache.is_some());
+    }
+
+    #[test]
+    fn esc_in_graph_view_returns_to_normal() {
+        let (mut app, _dir) = app_with_epics(2);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.mode, InputMode::GraphView);
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn build_epic_graph_produces_correct_layout() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_a = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_b = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_c = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Epic C".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        // A blocks B, A blocks C
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Epic,
+                blocker_id: epic_a.id.clone(),
+                blocked_type: DependencyType::Epic,
+                blocked_id: epic_b.id.clone(),
+            },
+        )
+        .unwrap();
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Epic,
+                blocker_id: epic_a.id.clone(),
+                blocked_type: DependencyType::Epic,
+                blocked_id: epic_c.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+        app.build_epic_graph();
+
+        let cache = app.graph_cache.as_ref().unwrap();
+
+        // Should have 3 nodes, 2 edges, 2 layers
+        assert_eq!(cache.layout.nodes.len(), 3);
+        assert_eq!(cache.layout.edges.len(), 2);
+        assert_eq!(cache.layout.layers.len(), 2);
+
+        // All 3 nodes should have positions
+        assert_eq!(cache.node_positions.len(), 3);
+
+        // Epic A should be in layer 0, B and C in layer 1
+        assert_eq!(cache.layout.nodes[&epic_a.id].layer, Some(0));
+        assert_eq!(cache.layout.nodes[&epic_b.id].layer, Some(1));
+        assert_eq!(cache.layout.nodes[&epic_c.id].layer, Some(1));
+    }
+
+    #[test]
+    fn graph_key_1_stays_epic_2_switches_to_task() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+        assert!(app.graph_cache.is_some());
+
+        // Pressing 1 while already in Epic mode does nothing
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+
+        // Pressing 2 switches to Task mode and builds task graph
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(app.graph_mode, GraphLevel::Task);
+        assert!(app.graph_cache.is_some());
+        assert_eq!(app.graph_cache.as_ref().unwrap().level, GraphLevel::Task);
+    }
+
+    #[test]
+    fn graph_cache_invalidated_on_data_refresh() {
+        let (mut app, _dir) = app_with_epics(2);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(app.graph_cache.is_some());
+
+        // Simulating a data refresh should invalidate the cache
+        app.refresh_data();
+        assert!(app.graph_cache.is_none());
+    }
+
+    #[test]
+    fn build_task_graph_produces_correct_layout() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Epic".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t3 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task C".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        // t1 -> t2, t1 -> t3
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2.id.clone(),
+            },
+        )
+        .unwrap();
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1.id.clone(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t3.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+        app.build_task_graph();
+
+        let cache = app.graph_cache.as_ref().unwrap();
+        assert_eq!(cache.level, GraphLevel::Task);
+        assert_eq!(cache.layout.nodes.len(), 3);
+        assert_eq!(cache.layout.edges.len(), 2);
+        assert_eq!(cache.layout.layers.len(), 2);
+        // All 3 nodes should have positions
+        assert_eq!(cache.node_positions.len(), 3);
+    }
+
+    #[test]
+    fn build_task_graph_no_epic_selected_clears_cache() {
+        let (mut app, _dir) = app_with_projects(1);
+        // No epics loaded
+        assert!(app.epics.is_empty());
+        app.build_task_graph();
+        assert!(app.graph_cache.is_none());
+    }
+
+    #[test]
+    fn pressing_2_in_graph_view_sets_task_mode() {
+        let (mut app, _dir) = app_with_tasks(2);
+        // Enter graph view (starts in epic mode)
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.mode, InputMode::GraphView);
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+
+        // Press 2 to switch to task mode
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(app.graph_mode, GraphLevel::Task);
+        assert!(app.graph_cache.is_some());
+        assert_eq!(app.graph_cache.as_ref().unwrap().level, GraphLevel::Task);
+    }
+
+    #[test]
+    fn build_task_graph_orphan_tasks_positioned() {
+        // Tasks with no dependencies should be placed as orphans
+        let (mut app, _dir) = app_with_tasks(3);
+        app.build_task_graph();
+
+        let cache = app.graph_cache.as_ref().unwrap();
+        assert_eq!(cache.level, GraphLevel::Task);
+        // 3 tasks, no deps → all orphans
+        assert_eq!(cache.layout.orphans.len(), 3);
+        assert_eq!(cache.node_positions.len(), 3);
     }
 }

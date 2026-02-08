@@ -6,10 +6,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::tui::app::{App, FocusedPanel, InputMode};
+use crate::tui::app::{App, FocusedPanel, GraphLevel, InputMode};
+use crate::tui::graph_render::{
+    Canvas, NodeBox, render_edges, render_node, NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
+};
 use crate::tui::theme;
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    if app.mode == InputMode::GraphView {
+        draw_graph_view(frame, app);
+        return;
+    }
+
     // Fill the entire background
     let bg_block = Block::default().style(Style::default().bg(theme::BG));
     frame.render_widget(bg_block, frame.area());
@@ -75,6 +83,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
         InputMode::TaskDetail | InputMode::HelpOverlay => "  Esc: Close",
+        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -97,7 +106,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         InputMode::ProjectSelector => draw_project_selector(frame, app),
         InputMode::TaskDetail => draw_task_detail(frame, app),
         InputMode::HelpOverlay => draw_help_overlay(frame),
-        InputMode::Normal => {}
+        InputMode::Normal | InputMode::GraphView => {}
     }
 }
 
@@ -471,4 +480,199 @@ fn draw_help_overlay(frame: &mut Frame) {
 
     let help = Paragraph::new(lines).block(panel_block(" Help ", true));
     frame.render_widget(help, area);
+}
+
+fn draw_graph_view(frame: &mut Frame, app: &App) {
+    // Fill the entire background
+    let bg_block = Block::default().style(Style::default().bg(theme::BG));
+    frame.render_widget(bg_block, frame.area());
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    // Header with tab indicators
+    let epic_tab = if app.graph_mode == GraphLevel::Epic {
+        Span::styled(
+            "[EPICS]",
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("epics", Style::default().fg(theme::TEXT_DIM))
+    };
+
+    let task_tab = if app.graph_mode == GraphLevel::Task {
+        Span::styled(
+            "[TASKS]",
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("tasks", Style::default().fg(theme::TEXT_DIM))
+    };
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            "  \u{2593}\u{2593} DEPENDENCY GRAPH \u{2593}\u{2593} ",
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("\u{2502} ", Style::default().fg(theme::BORDER_DIM)),
+        epic_tab,
+        Span::styled("  ", Style::default()),
+        task_tab,
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::panel_border(false))
+            .style(Style::default().bg(theme::BG)),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    // Sub-header for task-level view
+    if app.graph_mode == GraphLevel::Task {
+        if let Some(epic) = app.selected_epic() {
+            let sub_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(chunks[1]);
+
+            let sub_header = Paragraph::new(Line::from(vec![
+                Span::styled("  EPIC: ", Style::default().fg(theme::TEXT_DIM)),
+                Span::styled(
+                    &epic.title,
+                    Style::default()
+                        .fg(theme::NEON_MAGENTA)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]))
+            .style(Style::default().bg(theme::BG));
+            frame.render_widget(sub_header, sub_chunks[0]);
+
+            // Render task graph in the remaining area
+            draw_graph_canvas(frame, app, sub_chunks[1]);
+        } else {
+            // No epic selected — show centered message
+            let msg = Paragraph::new("Select an epic first")
+                .style(Style::default().fg(theme::TEXT_DIM).bg(theme::BG))
+                .alignment(ratatui::layout::Alignment::Center);
+            frame.render_widget(msg, chunks[1]);
+        }
+    } else {
+        // Epic-level graph
+        draw_graph_canvas(frame, app, chunks[1]);
+    }
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![Span::styled(
+        "  Esc: Back  1: Epics  2: Tasks",
+        Style::default().fg(theme::TEXT_DIM),
+    )]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::panel_border(false))
+            .title(Span::styled(
+                " Help ",
+                Style::default().fg(theme::TEXT_DIM),
+            ))
+            .style(Style::default().bg(theme::BG)),
+    );
+    frame.render_widget(footer, chunks[2]);
+}
+
+fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
+    let canvas_width = area.width as usize;
+    let canvas_height = area.height as usize;
+
+    if canvas_width == 0 || canvas_height == 0 {
+        return;
+    }
+
+    if let Some(cache) = &app.graph_cache {
+        // For task-level, check if there are no tasks
+        if cache.level == GraphLevel::Task && app.tasks.is_empty() {
+            let msg = Paragraph::new("No tasks in this epic")
+                .style(Style::default().fg(theme::TEXT_DIM).bg(theme::BG))
+                .alignment(ratatui::layout::Alignment::Center);
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        let mut canvas = Canvas::new(canvas_width, canvas_height);
+
+        let (blocked_ids, node_height) = match cache.level {
+            GraphLevel::Epic => (&app.blocked_epic_ids, NODE_HEIGHT_EPIC),
+            GraphLevel::Task => (&app.blocked_task_ids, NODE_HEIGHT_TASK),
+        };
+
+        // Render nodes
+        for (node_id, &(x, y)) in &cache.node_positions {
+            if let Some(node) = cache.layout.nodes.get(node_id) {
+                let progress = match cache.level {
+                    GraphLevel::Epic => {
+                        app.epics
+                            .iter()
+                            .find(|e| e.id == *node_id)
+                            .map(|e| (e.done_count as usize, e.task_count as usize))
+                    }
+                    GraphLevel::Task => None,
+                };
+
+                let node_box = NodeBox {
+                    title: node.label.clone(),
+                    status: node.status.clone(),
+                    progress,
+                    x,
+                    y,
+                    blocked: blocked_ids.contains(node_id),
+                };
+                render_node(&mut canvas, &node_box, app.animation_frame);
+            }
+        }
+
+        // Render edges
+        render_edges(
+            &mut canvas,
+            &cache.layout,
+            &cache.node_positions,
+            blocked_ids,
+            node_height,
+        );
+
+        // Blit canvas to frame
+        let lines: Vec<Line> = (0..canvas_height)
+            .map(|y| {
+                let spans: Vec<Span> = (0..canvas_width)
+                    .map(|x| {
+                        let cell = canvas.get(x, y);
+                        Span::styled(cell.ch.to_string(), cell.style)
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(lines).style(Style::default().bg(theme::BG));
+        frame.render_widget(paragraph, area);
+    } else {
+        let msg = match app.graph_mode {
+            GraphLevel::Task if app.selected_epic().is_none() => "Select an epic first",
+            _ => "No graph data",
+        };
+        let empty = Paragraph::new(msg)
+            .style(Style::default().fg(theme::TEXT_DIM).bg(theme::BG))
+            .alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(empty, area);
+    }
 }

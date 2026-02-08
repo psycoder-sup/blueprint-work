@@ -138,6 +138,7 @@ pub fn border_style(status: &ItemStatus, animation_frame: u8, blocked: bool) -> 
 }
 
 /// Border character set for a given status.
+#[derive(Clone, Copy)]
 struct BorderChars {
     tl: char,
     tr: char,
@@ -147,17 +148,19 @@ struct BorderChars {
     v: char,
 }
 
+/// Double-line border set used for TODO, DONE, and blocked nodes.
+const DOUBLE_LINE_BORDERS: BorderChars = BorderChars {
+    tl: '\u{2554}', // ╔
+    tr: '\u{2557}', // ╗
+    bl: '\u{255A}', // ╚
+    br: '\u{255D}', // ╝
+    h: '\u{2550}',  // ═
+    v: '\u{2551}',  // ║
+};
+
 fn border_chars(status: &ItemStatus, animation_frame: u8, blocked: bool) -> BorderChars {
-    // Blocked nodes always use double-line borders
     if blocked {
-        return BorderChars {
-            tl: '\u{2554}', // ╔
-            tr: '\u{2557}', // ╗
-            bl: '\u{255A}', // ╚
-            br: '\u{255D}', // ╝
-            h: '\u{2550}',  // ═
-            v: '\u{2551}',  // ║
-        };
+        return DOUBLE_LINE_BORDERS;
     }
     match status {
         // IN_PROGRESS uses rounded corners with animated dashed borders.
@@ -175,15 +178,7 @@ fn border_chars(status: &ItemStatus, animation_frame: u8, blocked: bool) -> Bord
                 v,
             }
         }
-        // DONE and TODO use solid double-line borders
-        _ => BorderChars {
-            tl: '\u{2554}', // ╔
-            tr: '\u{2557}', // ╗
-            bl: '\u{255A}', // ╚
-            br: '\u{255D}', // ╝
-            h: '\u{2550}',  // ═
-            v: '\u{2551}',  // ║
-        },
+        _ => DOUBLE_LINE_BORDERS,
     }
 }
 
@@ -285,12 +280,16 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
 /// of the target node, using straight vertical lines for same-column edges
 /// and L/Z-shaped routing for cross-column edges.
 ///
+/// `node_height` determines the vertical offset from each source node's
+/// top-left corner to the edge departure point (bottom-center).
+///
 /// Existing non-space characters (i.e. node content) are never overwritten.
 pub fn render_edges(
     canvas: &mut Canvas,
     layout: &DagLayout,
     node_positions: &HashMap<String, (usize, usize)>,
     blocked_ids: &HashSet<String>,
+    node_height: usize,
 ) {
     for edge in &layout.edges {
         let Some(&(from_x, from_y)) = node_positions.get(&edge.from) else {
@@ -308,7 +307,7 @@ pub fn render_edges(
 
         // Source: bottom-center of `from` node.
         let src_x = from_x + NODE_WIDTH / 2;
-        let src_y = from_y + NODE_HEIGHT_TASK; // one row below bottom border
+        let src_y = from_y + node_height; // one row below bottom border
 
         // Target: top-center of `to` node, one row above.
         let dst_x = to_x + NODE_WIDTH / 2;
@@ -930,7 +929,7 @@ mod tests {
         positions.insert("B".to_string(), (0_usize, 5_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // src_x = 0 + 22/2 = 11, src_y = 0 + 3 = 3, dst_y = 5 - 1 = 4
         // Vertical │ at (11, 3), ▼ at (11, 4)
@@ -954,7 +953,7 @@ mod tests {
         positions.insert("B".to_string(), (24_usize, 6_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // src_x = 11, src_y = 3, dst_x = 35, dst_y = 5
         // (11, 3) = │, (11, 4) = ╰, horizontal ─ from 12..35, (35, 4) = ╮, (35, 5) = ▼
@@ -979,7 +978,7 @@ mod tests {
         positions.insert("B".to_string(), (0_usize, 6_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // src_x = 35, src_y = 3, dst_x = 11, dst_y = 5
         // (35, 3) = │, (35, 4) = ╯, horizontal ─ from 12..35, (11, 4) = ╭, (11, 5) = ▼
@@ -1006,7 +1005,7 @@ mod tests {
         let mut blocked = HashSet::new();
         blocked.insert("C".to_string());
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // Edge A->B (not blocked) should be cyan.
         assert_eq!(canvas.get(11, 3).style.fg, Some(theme::NEON_CYAN));
@@ -1032,7 +1031,7 @@ mod tests {
         // Place a node character on the canvas first.
         canvas.put_char(11, 3, 'X', Style::default());
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // The 'X' should NOT be overwritten by the edge character.
         assert_eq!(canvas.get(11, 3).ch, 'X');
@@ -1049,7 +1048,7 @@ mod tests {
         let positions = HashMap::new();
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked);
+        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
 
         // Canvas should remain all spaces.
         for y in 0..canvas.height {

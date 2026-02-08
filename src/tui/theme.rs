@@ -10,12 +10,10 @@ pub const NEON_MAGENTA: Color = Color::Rgb(0xff, 0x00, 0xff);
 pub const NEON_PINK: Color = Color::Rgb(0xff, 0x2d, 0x6f);
 pub const NEON_GREEN: Color = Color::Rgb(0x39, 0xff, 0x14);
 pub const NEON_ORANGE: Color = Color::Rgb(0xff, 0x6e, 0x27);
-pub const ELECTRIC_BLUE: Color = Color::Rgb(0x00, 0xd4, 0xff);
 pub const TEXT_DIM: Color = Color::Rgb(0xb0, 0xb0, 0xb0);
 pub const TEXT_BRIGHT: Color = Color::Rgb(0xff, 0xff, 0xff);
 pub const BORDER_DIM: Color = Color::Rgb(0x00, 0x5f, 0x5f);
 pub const BORDER_BRIGHT: Color = Color::Rgb(0x00, 0xff, 0xf5);
-pub const DARK_RED: Color = Color::Rgb(0x66, 0x11, 0x22);
 pub const DARK_ORANGE: Color = Color::Rgb(0x66, 0x33, 0x11);
 
 // ── Style presets ──────────────────────────────────────────────────
