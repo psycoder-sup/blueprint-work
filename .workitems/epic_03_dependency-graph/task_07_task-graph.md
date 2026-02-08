@@ -1,7 +1,7 @@
 ---
 id: TK-0307
 title: "Build Task-Level Graph View"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0301, TK-0302, TK-0305]

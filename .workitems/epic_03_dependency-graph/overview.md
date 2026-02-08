@@ -32,8 +32,8 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 | 03 | Implement animated marching dotted border | done |
 | 04 | Implement pulsing border for blocked nodes | done |
 | 05 | Implement edge routing | done |
-| 06 | Build epic-level graph view | todo |
-| 07 | Build task-level graph view | todo |
+| 06 | Build epic-level graph view | done |
+| 07 | Build task-level graph view | done |
 | 08 | Implement graph view toggle & scroll | todo |
 | 09 | Build graph summary bar | todo |
 
