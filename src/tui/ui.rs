@@ -9,7 +9,8 @@ use ratatui::Frame;
 use crate::models::ItemStatus;
 use crate::tui::app::{App, FocusedPanel, GraphCache, GraphLevel, GraphPane, InputMode};
 use crate::tui::graph_render::{
-    Canvas, NodeBox, render_edges, render_node, NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
+    Canvas, NodeBox, render_edges, render_focus_highlight, render_node, NODE_HEIGHT_EPIC,
+    NODE_HEIGHT_TASK,
 };
 use crate::tui::theme;
 
@@ -84,7 +85,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
         InputMode::TaskDetail | InputMode::HelpOverlay => "  Esc: Close",
-        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  h/j/k/l: Scroll",
+        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  \u{2190}\u{2191}\u{2192}\u{2193}: Focus  hjkl: Scroll",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -593,7 +594,7 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
 
 fn draw_graph_footer(frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(vec![Span::styled(
-        "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  h/j/k/l: Scroll",
+        "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  \u{2190}\u{2191}\u{2192}\u{2193}: Focus  hjkl: Scroll",
         Style::default().fg(theme::TEXT_DIM),
     )]))
     .block(
@@ -690,6 +691,7 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
         app.graph_mode,
         app.scroll_x,
         app.scroll_y,
+        app.focused_node.as_deref(),
     );
 }
 
@@ -702,6 +704,7 @@ fn draw_graph_canvas_with_cache(
     level: GraphLevel,
     scroll_x: usize,
     scroll_y: usize,
+    focused_node_id: Option<&str>,
 ) {
     let viewport_width = area.width as usize;
     let viewport_height = area.height as usize;
@@ -766,6 +769,13 @@ fn draw_graph_canvas_with_cache(
             blocked_ids,
             node_height,
         );
+
+        // Render focus highlight on the selected node
+        if let Some(fid) = focused_node_id {
+            if let Some(&(fx, fy)) = cache.node_positions.get(fid) {
+                render_focus_highlight(&mut canvas, fx, fy, node_height);
+            }
+        }
 
         // Clamp scroll offsets to valid bounds.
         let max_scroll_x = canvas_w.saturating_sub(viewport_width);
@@ -905,6 +915,7 @@ fn draw_dual_pane_graph(frame: &mut Frame, app: &App) {
         GraphLevel::Epic,
         app.epic_scroll_x,
         app.epic_scroll_y,
+        app.epic_focused_node.as_deref(),
     );
 
     // Right pane: Tasks
@@ -924,6 +935,7 @@ fn draw_dual_pane_graph(frame: &mut Frame, app: &App) {
         GraphLevel::Task,
         app.task_scroll_x,
         app.task_scroll_y,
+        app.task_focused_node.as_deref(),
     );
 
     // Summary bar

@@ -256,10 +256,8 @@ fn render_marching_border(canvas: &mut Canvas, x: usize, y: usize, node_height: 
     for row in (1..node_height - 1).rev() {
         let (ch, st) = marching_cell(p, animation_frame, false);
         canvas.put_char(x, y + row, ch, st);
-        // p += 1; // not needed for last segment but keep for clarity
         p += 1;
     }
-    let _ = p; // suppress unused warning
 }
 
 // ── Rendering ────────────────────────────────────────────────────────
@@ -467,6 +465,42 @@ pub fn render_edges(
             put_edge_char(canvas, dst_x, dst_y, '\u{25BC}', style); // ▼
         }
     }
+}
+
+/// Render a focus highlight as a 1-cell outer glow around a node.
+///
+/// Called after `render_node()` to draw a rounded single-line border one cell
+/// outside the node, leaving the inner status-based border fully visible.
+pub fn render_focus_highlight(canvas: &mut Canvas, x: usize, y: usize, node_height: usize) {
+    let style = Style::default()
+        .fg(theme::NEON_MAGENTA)
+        .add_modifier(ratatui::style::Modifier::BOLD);
+
+    let outer_w = NODE_WIDTH + 2;
+    // Use wrapping_sub to get usize coordinates; put_char clips out-of-bounds.
+    let ox = x.wrapping_sub(1);
+    let oy = y.wrapping_sub(1);
+
+    // Top border: ╭───╮ at oy
+    canvas.put_char(ox, oy, '\u{256D}', style); // ╭
+    for i in 1..outer_w - 1 {
+        canvas.put_char(ox + i, oy, '\u{2500}', style); // ─
+    }
+    canvas.put_char(ox + outer_w - 1, oy, '\u{256E}', style); // ╮
+
+    // Side borders: │ at ox and ox+outer_w-1 for each row of the node
+    for row in 0..node_height {
+        canvas.put_char(ox, y + row, '\u{2502}', style); // │
+        canvas.put_char(ox + outer_w - 1, y + row, '\u{2502}', style); // │
+    }
+
+    // Bottom border: ╰───╯ at y+node_height
+    let bottom_oy = y + node_height;
+    canvas.put_char(ox, bottom_oy, '\u{2570}', style); // ╰
+    for i in 1..outer_w - 1 {
+        canvas.put_char(ox + i, bottom_oy, '\u{2500}', style); // ─
+    }
+    canvas.put_char(ox + outer_w - 1, bottom_oy, '\u{256F}', style); // ╯
 }
 
 /// Place an edge character on the canvas, but only if the cell is currently a space.
@@ -1198,5 +1232,62 @@ mod tests {
                 assert_eq!(canvas.get(x, y).ch, ' ');
             }
         }
+    }
+
+    // ── Focus highlight (outer glow) ─────────────────────────────
+
+    #[test]
+    fn focus_highlight_outer_glow_preserves_inner_border() {
+        // Canvas needs extra room: node at (2,2) with outer glow at (1,1)
+        let mut canvas = Canvas::new(30, 8);
+        let node = NodeBox {
+            title: "Node".to_string(),
+            status: ItemStatus::Todo,
+            progress: None,
+            x: 2,
+            y: 2,
+            blocked: false,
+        };
+        render_node(&mut canvas, &node, 0);
+
+        // Before highlight: inner border color should be TEXT_DIM (todo status)
+        assert_eq!(canvas.get(2, 2).style.fg, Some(theme::TEXT_DIM));
+        assert_eq!(canvas.get(2, 2).ch, '\u{2554}'); // inner top-left
+
+        render_focus_highlight(&mut canvas, 2, 2, NODE_HEIGHT_TASK);
+
+        // Inner border should be UNCHANGED (still TEXT_DIM, still double-line)
+        assert_eq!(canvas.get(2, 2).style.fg, Some(theme::TEXT_DIM));
+        assert_eq!(canvas.get(2, 2).ch, '\u{2554}');
+        assert_eq!(canvas.get(2 + NODE_WIDTH - 1, 2).ch, '\u{2557}');
+        assert_eq!(canvas.get(2, 4).ch, '\u{255A}');
+        assert_eq!(canvas.get(2 + NODE_WIDTH - 1, 4).ch, '\u{255D}');
+
+        // Outer glow should appear at (x-1, y-1) = (1, 1)
+        assert_eq!(canvas.get(1, 1).ch, '\u{256D}'); // ╭
+        assert_eq!(canvas.get(1, 1).style.fg, Some(theme::NEON_MAGENTA));
+        assert!(
+            canvas.get(1, 1).style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "outer glow should be bold"
+        );
+        // Top-right outer corner at (x + NODE_WIDTH, y - 1) = (24, 1)
+        assert_eq!(canvas.get(2 + NODE_WIDTH, 1).ch, '\u{256E}'); // ╮
+        // Bottom-left outer corner at (x-1, y + node_height) = (1, 5)
+        assert_eq!(canvas.get(1, 5).ch, '\u{2570}'); // ╰
+        // Bottom-right outer corner at (x + NODE_WIDTH, y + node_height) = (24, 5)
+        assert_eq!(canvas.get(2 + NODE_WIDTH, 5).ch, '\u{256F}'); // ╯
+        // Top edge glow
+        assert_eq!(canvas.get(2, 1).ch, '\u{2500}'); // ─
+    }
+
+    #[test]
+    fn focus_highlight_epic_height() {
+        // Node at (2,2), outer glow needs room: canvas 30 wide, 8 tall
+        let mut canvas = Canvas::new(30, 8);
+        render_focus_highlight(&mut canvas, 2, 2, NODE_HEIGHT_EPIC);
+
+        // Bottom outer glow at y + NODE_HEIGHT_EPIC = 2 + 4 = 6
+        assert_eq!(canvas.get(1, 6).ch, '\u{2570}'); // ╰
+        assert_eq!(canvas.get(1, 6).style.fg, Some(theme::NEON_MAGENTA));
     }
 }

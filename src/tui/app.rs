@@ -42,6 +42,14 @@ pub enum GraphPane {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 /// Cached graph layout data (recomputed only when data changes).
 pub struct GraphCache {
     pub layout: DagLayout,
@@ -94,6 +102,14 @@ pub struct App {
     pub epic_scroll_y: usize,
     pub task_scroll_x: usize,
     pub task_scroll_y: usize,
+    /// Focused node ID in single-pane graph view.
+    pub focused_node: Option<String>,
+    /// Focused node ID in dual-pane left (epic) graph.
+    pub epic_focused_node: Option<String>,
+    /// Focused node ID in dual-pane right (task) graph.
+    pub task_focused_node: Option<String>,
+    /// Viewport size (width, height) for auto-scroll, updated each frame.
+    pub graph_viewport_size: (u16, u16),
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -176,6 +192,10 @@ impl App {
             epic_scroll_y: 0,
             task_scroll_x: 0,
             task_scroll_y: 0,
+            focused_node: None,
+            epic_focused_node: None,
+            task_focused_node: None,
+            graph_viewport_size: (0, 0),
         };
         app.refresh_data();
         Ok(app)
@@ -183,6 +203,11 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         while self.running {
+            // Store viewport size for auto-scroll calculations.
+            if let Ok(size) = terminal.size() {
+                self.graph_viewport_size = (size.width, size.height);
+            }
+
             terminal.draw(|frame| ui::draw(frame, self))?;
 
             if event::poll(Duration::from_millis(42))? {
@@ -321,6 +346,7 @@ impl App {
                 self.reset_scroll();
                 self.graph_mode = GraphLevel::Epic;
                 self.build_epic_graph();
+                self.focused_node = None;
                 self.mode = InputMode::GraphView;
             }
             KeyCode::Tab => self.toggle_focus(),
@@ -372,12 +398,14 @@ impl App {
                 if self.dual_pane || self.graph_mode != GraphLevel::Epic {
                     self.exit_dual_to_single_epic();
                 }
+                self.focused_node = None;
             }
             KeyCode::Char('2') => {
                 self.dual_pane = false;
                 self.reset_scroll();
                 self.graph_mode = GraphLevel::Task;
                 self.build_task_graph();
+                self.focused_node = None;
             }
             KeyCode::Char('3') => {
                 if self.dual_pane {
@@ -386,6 +414,8 @@ impl App {
                     self.dual_pane = true;
                     self.active_pane = GraphPane::Left;
                     self.build_dual_graphs();
+                    self.epic_focused_node = None;
+                    self.task_focused_node = None;
                 }
             }
             KeyCode::Tab if self.dual_pane => {
@@ -394,19 +424,32 @@ impl App {
                     GraphPane::Right => GraphPane::Left,
                 };
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            // Arrow keys: node navigation
+            KeyCode::Down | KeyCode::Up | KeyCode::Right | KeyCode::Left => {
+                let direction = match key.code {
+                    KeyCode::Down => GraphDirection::Down,
+                    KeyCode::Up => GraphDirection::Up,
+                    KeyCode::Right => GraphDirection::Right,
+                    _ => GraphDirection::Left,
+                };
+                self.navigate_graph_node(direction);
+                self.ensure_focused_node_visible();
+                self.sync_task_graph_to_focused_epic();
+            }
+            // hjkl: viewport panning
+            KeyCode::Char('j') => {
                 let (_, sy) = self.active_scroll_mut();
                 *sy = sy.saturating_add(1);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') => {
                 let (_, sy) = self.active_scroll_mut();
                 *sy = sy.saturating_sub(1);
             }
-            KeyCode::Char('l') | KeyCode::Right => {
+            KeyCode::Char('l') => {
                 let (sx, _) = self.active_scroll_mut();
                 *sx = sx.saturating_add(1);
             }
-            KeyCode::Char('h') | KeyCode::Left => {
+            KeyCode::Char('h') => {
                 let (sx, _) = self.active_scroll_mut();
                 *sx = sx.saturating_sub(1);
             }
@@ -422,6 +465,203 @@ impl App {
             }
         } else {
             (&mut self.scroll_x, &mut self.scroll_y)
+        }
+    }
+
+    /// Returns a mutable reference to the focused node for the active pane/mode.
+    fn active_focused_node_mut(&mut self) -> &mut Option<String> {
+        if self.dual_pane {
+            match self.active_pane {
+                GraphPane::Left => &mut self.epic_focused_node,
+                GraphPane::Right => &mut self.task_focused_node,
+            }
+        } else {
+            &mut self.focused_node
+        }
+    }
+
+    /// Returns the active graph cache for the current pane/mode.
+    fn active_graph_cache(&self) -> Option<&GraphCache> {
+        if self.dual_pane {
+            match self.active_pane {
+                GraphPane::Left => self.epic_graph_cache.as_ref(),
+                GraphPane::Right => self.task_graph_cache.as_ref(),
+            }
+        } else {
+            self.graph_cache.as_ref()
+        }
+    }
+
+    /// Returns the focused node ID for the current pane/mode.
+    pub fn active_focused_node(&self) -> Option<&str> {
+        if self.dual_pane {
+            match self.active_pane {
+                GraphPane::Left => self.epic_focused_node.as_deref(),
+                GraphPane::Right => self.task_focused_node.as_deref(),
+            }
+        } else {
+            self.focused_node.as_deref()
+        }
+    }
+
+    /// Build a navigation grid from the graph cache layers + orphans.
+    fn navigation_grid(cache: &GraphCache) -> Vec<Vec<String>> {
+        let mut grid: Vec<Vec<String>> = cache.layout.layers.clone();
+        if !cache.layout.orphans.is_empty() {
+            grid.push(cache.layout.orphans.clone());
+        }
+        grid
+    }
+
+    /// Find the (row, col) of a node ID in the grid.
+    fn find_in_grid(grid: &[Vec<String>], node_id: &str) -> Option<(usize, usize)> {
+        for (row, layer) in grid.iter().enumerate() {
+            for (col, id) in layer.iter().enumerate() {
+                if id == node_id {
+                    return Some((row, col));
+                }
+            }
+        }
+        None
+    }
+
+    /// Navigate to a neighboring node in the graph grid.
+    fn navigate_graph_node(&mut self, direction: GraphDirection) {
+        let Some(cache) = self.active_graph_cache() else {
+            return;
+        };
+
+        let grid = Self::navigation_grid(cache);
+        if grid.is_empty() || grid.iter().all(|row| row.is_empty()) {
+            return;
+        }
+
+        let current_focus = self.active_focused_node().map(str::to_owned);
+
+        let new_id = match current_focus.as_deref() {
+            Some(current_id) => {
+                let (row, col) = match Self::find_in_grid(&grid, current_id) {
+                    Some(pos) => pos,
+                    None => {
+                        // Node not found in grid (stale focus), reset to first
+                        (0, 0)
+                    }
+                };
+                match direction {
+                    GraphDirection::Up => {
+                        let new_row = row.saturating_sub(1);
+                        let new_col = col.min(grid[new_row].len().saturating_sub(1));
+                        grid[new_row][new_col].clone()
+                    }
+                    GraphDirection::Down => {
+                        let new_row = (row + 1).min(grid.len() - 1);
+                        let new_col = col.min(grid[new_row].len().saturating_sub(1));
+                        grid[new_row][new_col].clone()
+                    }
+                    GraphDirection::Left => {
+                        let row_len = grid[row].len();
+                        let new_col = (col + row_len - 1) % row_len;
+                        grid[row][new_col].clone()
+                    }
+                    GraphDirection::Right => {
+                        let row_len = grid[row].len();
+                        let new_col = (col + 1) % row_len;
+                        grid[row][new_col].clone()
+                    }
+                }
+            }
+            None => {
+                // No current focus -- select the first node in the first non-empty row.
+                grid.iter()
+                    .find(|row| !row.is_empty())
+                    .map(|row| row[0].clone())
+                    .unwrap_or_default()
+            }
+        };
+
+        if !new_id.is_empty() {
+            *self.active_focused_node_mut() = Some(new_id);
+        }
+    }
+
+    /// When the focused epic changes in dual-pane left pane, update the selected
+    /// epic and rebuild the task graph for the right pane.
+    fn sync_task_graph_to_focused_epic(&mut self) {
+        if !self.dual_pane || self.active_pane != GraphPane::Left {
+            return;
+        }
+        let Some(ref focused_id) = self.epic_focused_node else {
+            return;
+        };
+        // Find the epic index matching the focused node ID.
+        let Some(idx) = self.epics.iter().position(|e| e.id == *focused_id) else {
+            return;
+        };
+        if idx == self.selected_epic_idx {
+            return; // no change
+        }
+        self.selected_epic_idx = idx;
+        self.selected_task_idx = 0;
+        self.refresh_tasks();
+        // Rebuild the task graph cache for the right pane.
+        self.build_task_graph();
+        self.task_graph_cache = self.graph_cache.take();
+        self.task_scroll_x = 0;
+        self.task_scroll_y = 0;
+        self.task_focused_node = None;
+    }
+
+    /// Auto-scroll to keep the focused node visible, with 2-cell padding.
+    fn ensure_focused_node_visible(&mut self) {
+        let focused_id = self.active_focused_node().map(str::to_owned);
+
+        let Some(focused_id) = focused_id else {
+            return;
+        };
+
+        let Some(cache) = self.active_graph_cache() else {
+            return;
+        };
+
+        let Some(&(node_x, node_y)) = cache.node_positions.get(&focused_id) else {
+            return;
+        };
+
+        let node_height = match cache.level {
+            GraphLevel::Epic => NODE_HEIGHT_EPIC,
+            GraphLevel::Task => NODE_HEIGHT_TASK,
+        };
+
+        // Approximate viewport size: use stored terminal size minus chrome.
+        // In dual-pane mode, the viewport is roughly half the terminal width.
+        let vw = if self.dual_pane {
+            (self.graph_viewport_size.0 as usize) / 2
+        } else {
+            self.graph_viewport_size.0 as usize
+        };
+        // Subtract header/footer/summary chrome (~7 rows).
+        let vh = (self.graph_viewport_size.1 as usize).saturating_sub(7);
+
+        if vw == 0 || vh == 0 {
+            return;
+        }
+
+        let padding: usize = 2;
+
+        let (sx, sy) = self.active_scroll_mut();
+
+        // Horizontal
+        if node_x < sx.saturating_add(padding) {
+            *sx = node_x.saturating_sub(padding);
+        } else if node_x + NODE_WIDTH + padding > *sx + vw {
+            *sx = (node_x + NODE_WIDTH + padding).saturating_sub(vw);
+        }
+
+        // Vertical
+        if node_y < sy.saturating_add(padding) {
+            *sy = node_y.saturating_sub(padding);
+        } else if node_y + node_height + padding > *sy + vh {
+            *sy = (node_y + node_height + padding).saturating_sub(vh);
         }
     }
 
@@ -1684,18 +1924,18 @@ mod tests {
     }
 
     #[test]
-    fn scroll_arrow_keys_work() {
+    fn arrow_keys_navigate_nodes_not_scroll() {
         let (mut app, _dir) = app_with_epics(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
 
+        // Arrow keys should set focused_node, not scroll
         app.handle_key(KeyEvent::from(KeyCode::Down));
-        assert_eq!(app.scroll_y, 1);
-        app.handle_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(app.scroll_y, 0);
-        app.handle_key(KeyEvent::from(KeyCode::Right));
-        assert_eq!(app.scroll_x, 1);
-        app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.scroll_x, 0);
+        assert!(app.focused_node.is_some(), "Down arrow should focus a node");
+        assert_eq!(app.scroll_y, 0, "scroll_y should not change from arrow keys (unless auto-scroll)");
+
+        // hjkl should still scroll
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.scroll_y, 1, "j should scroll");
     }
 
     #[test]
@@ -1884,5 +2124,264 @@ mod tests {
         app.refresh_data();
         assert!(app.epic_graph_cache.is_none());
         assert!(app.task_graph_cache.is_none());
+    }
+
+    // ==================== Node navigation tests ====================
+
+    #[test]
+    fn first_arrow_key_selects_first_node() {
+        let (mut app, _dir) = app_with_epics(3);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(app.focused_node.is_none());
+
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.focused_node.is_some(), "first arrow key should focus a node");
+    }
+
+    #[test]
+    fn arrow_down_up_navigates_between_layers() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_a = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_b = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        // A blocks B → two layers
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Epic,
+                blocker_id: epic_a.id.clone(),
+                blocked_type: DependencyType::Epic,
+                blocked_id: epic_b.id.clone(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        // First arrow selects first node (layer 0)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        let first = app.focused_node.clone().unwrap();
+        assert_eq!(first, epic_a.id, "layer 0 should contain the blocker");
+
+        // Down again should move to layer 1
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        let second = app.focused_node.clone().unwrap();
+        assert_eq!(second, epic_b.id, "layer 1 should contain the blocked epic");
+
+        // Up should go back to layer 0
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        let third = app.focused_node.clone().unwrap();
+        assert_eq!(third, epic_a.id, "Up should return to layer 0");
+    }
+
+    #[test]
+    fn left_right_wraps_within_layer() {
+        // 3 orphans = all in one layer row
+        let (mut app, _dir) = app_with_epics(3);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        // Focus first node
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        let first = app.focused_node.clone().unwrap();
+
+        // Right should move to second
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        let second = app.focused_node.clone().unwrap();
+        assert_ne!(first, second, "Right should move to a different node");
+
+        // Keep pressing Right to wrap back to the first
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        let wrapped = app.focused_node.clone().unwrap();
+        assert_eq!(wrapped, first, "Right should wrap around to the first node");
+    }
+
+    #[test]
+    fn focus_cleared_on_entering_graph_view() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.focused_node.is_some());
+
+        // Exit and re-enter
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(app.focused_node.is_none(), "Focus should be cleared on re-entry");
+    }
+
+    #[test]
+    fn focus_cleared_on_mode_switch_1_and_2() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.focused_node.is_some());
+
+        // Switch to task mode
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert!(app.focused_node.is_none(), "Focus should be cleared on mode 2");
+
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.focused_node.is_some());
+
+        // Switch to epic mode
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert!(app.focused_node.is_none(), "Focus should be cleared on mode 1");
+    }
+
+    #[test]
+    fn dual_pane_tracks_focus_independently() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+
+        // Focus a node in the left (epic) pane
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.epic_focused_node.is_some());
+        assert!(app.task_focused_node.is_none());
+
+        // Switch to right pane
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(app.task_focused_node.is_some());
+        // Epic focus should remain unchanged
+        assert!(app.epic_focused_node.is_some());
+    }
+
+    #[test]
+    fn hjkl_still_scrolls_in_graph_view() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.scroll_y, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.scroll_y, 0);
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.scroll_x, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.scroll_x, 0);
+    }
+
+    #[test]
+    fn dual_pane_epic_focus_updates_task_graph() {
+        let (db, _dir) = open_temp_db();
+        let project = create_project(
+            &db,
+            CreateProjectInput {
+                name: "P".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_a = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let epic_b = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Epic B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        // A blocks B so they're in separate layers
+        add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Epic,
+                blocker_id: epic_a.id.clone(),
+                blocked_type: DependencyType::Epic,
+                blocked_id: epic_b.id.clone(),
+            },
+        )
+        .unwrap();
+        // Create a task in each epic
+        create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic_a.id.clone(),
+                title: "Task in A".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic_b.id.clone(),
+                title: "Task in B".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let mut app = App::new(db).unwrap();
+
+        // Enter graph view then dual-pane mode
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.dual_pane);
+
+        // Focus the first epic node (layer 0 = epic_a, the blocker)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        let first_focused = app.epic_focused_node.clone().unwrap();
+        assert_eq!(first_focused, epic_a.id, "First focus should be on epic A (layer 0)");
+        let epic_a_idx = app.selected_epic_idx;
+        let tasks_for_first = app.tasks.iter().map(|t| t.title.clone()).collect::<Vec<_>>();
+
+        // Navigate down to the second epic (layer 1 = epic_b)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        let second_focused = app.epic_focused_node.clone().unwrap();
+        assert_eq!(second_focused, epic_b.id, "Second focus should be on epic B (layer 1)");
+
+        // The selected epic should have changed
+        assert_ne!(
+            app.selected_epic_idx, epic_a_idx,
+            "selected_epic_idx should change when focusing a different epic"
+        );
+
+        // The task graph should have been rebuilt for the new epic
+        assert!(app.task_graph_cache.is_some(), "task graph cache should be rebuilt");
+        let tasks_for_second = app.tasks.iter().map(|t| t.title.clone()).collect::<Vec<_>>();
+        assert_ne!(
+            tasks_for_first, tasks_for_second,
+            "tasks should reflect the newly focused epic"
+        );
+
+        // Task focus and scroll should be reset
+        assert!(app.task_focused_node.is_none(), "task focus should be cleared");
+        assert_eq!(app.task_scroll_x, 0);
+        assert_eq!(app.task_scroll_y, 0);
     }
 }
