@@ -1,25 +1,18 @@
-## Work Items
+## Blueprint MCP
 
-This project uses a `.workitems/` directory to track all implementation work as structured markdown files. Before starting any task, consult these files to understand scope, dependencies, and acceptance criteria.
+This project uses Blueprint MCP to track implementation work. When working on tasks or epics from a Blueprint project, keep their status up to date:
 
-### Structure
+### Starting work
 
-- `.workitems/CLAUDE.md` — Full guidelines for working with workitem files
-- `.workitems/_template.md` — Template for creating new task files
-- `.workitems/epic_NN_name/overview.md` — Epic summary with task table and status
-- `.workitems/epic_NN_name/task_NN_slug.md` — Individual task files with YAML frontmatter
+- Mark the **blueprint task** as `in_progress` when you begin implementing it.
+- Mark the parent **blueprint epic** as `in_progress` if it isn't already.
 
-### Workflow
+### Completing work
 
-1. **Find work:** Read the epic `overview.md` files to find tasks with `status: TODO` whose dependencies are all `DONE`.
-2. **Start a task:** Read the full task file, review referenced PRD sections, then set `status: IN-PROGRESS`.
-3. **Complete a task:** Verify all acceptance criteria, set `status: DONE`, add commit SHAs to `commits`, and update the epic's task table.
-4. **Create new tasks:** Copy `_template.md`, follow the naming convention (`task_{NN}_{kebab-slug}.md`), and add it to the epic's overview.
+- Mark the **blueprint task** as `done` when implementation is complete.
+- Mark the parent **blueprint epic** as `done` only when **all** of its tasks are done.
 
-### Key Rules
+### Creating tasks
 
-- Task IDs follow `TK-{epicNN}{taskNN}` format (e.g., `TK-0100` = epic 01, task 00).
-- Task files describe **what** to build, not **how** — no code snippets unless absolutely necessary.
-- Always check dependency chains before starting work.
-- See `.workitems/CLAUDE.md` for the complete reference.
-
+- Before calling `create_task`, read `.blueprint/task_template.md` for description templates.
+- Pick the template that best matches the task type and structure the task description accordingly.
