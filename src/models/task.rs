@@ -9,6 +9,7 @@ pub struct BlueTask {
     pub title: String,
     pub description: String,
     pub status: ItemStatus,
+    pub short_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

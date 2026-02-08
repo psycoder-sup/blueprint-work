@@ -4,7 +4,7 @@ use rusqlite::{params_from_iter, OptionalExtension, Row};
 use crate::db::Database;
 use crate::models::{BlueTask, CreateTaskInput, ItemStatus, UpdateTaskInput};
 
-const SELECT_COLUMNS: &str = "id, epic_id, title, description, status, created_at, updated_at";
+const SELECT_COLUMNS: &str = "id, epic_id, title, description, status, short_id, created_at, updated_at";
 
 fn row_to_task(row: &Row) -> rusqlite::Result<BlueTask> {
     let status_str: String = row.get("status")?;
@@ -22,6 +22,7 @@ fn row_to_task(row: &Row) -> rusqlite::Result<BlueTask> {
         title: row.get("title")?,
         description: row.get("description")?,
         status,
+        short_id: row.get("short_id")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })

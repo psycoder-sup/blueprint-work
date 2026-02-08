@@ -47,6 +47,7 @@ pub struct Epic {
     pub title: String,
     pub description: String,
     pub status: ItemStatus,
+    pub short_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub task_count: i64,

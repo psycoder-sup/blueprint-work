@@ -4,7 +4,7 @@ use rusqlite::{params_from_iter, OptionalExtension, Row};
 use crate::db::Database;
 use crate::models::{CreateEpicInput, Epic, ItemStatus, UpdateEpicInput};
 
-const SELECT_COLUMNS: &str = "e.id, e.project_id, e.title, e.description, e.status, e.created_at, e.updated_at";
+const SELECT_COLUMNS: &str = "e.id, e.project_id, e.title, e.description, e.status, e.short_id, e.created_at, e.updated_at";
 const TASK_AGGREGATES: &str =
     "COUNT(t.id) AS task_count, SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS done_count";
 
@@ -24,6 +24,7 @@ fn row_to_epic(row: &Row) -> rusqlite::Result<Epic> {
         title: row.get("title")?,
         description: row.get("description")?,
         status,
+        short_id: row.get("short_id")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         task_count: row.get("task_count")?,
