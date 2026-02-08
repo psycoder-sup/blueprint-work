@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::models::ItemStatus;
-use crate::tui::app::{App, FocusedPanel, GraphCache, GraphLevel, InputMode};
+use crate::tui::app::{App, FocusedPanel, GraphCache, GraphLevel, GraphPane, InputMode};
 use crate::tui::graph_render::{
     Canvas, NodeBox, render_edges, render_node, NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
 };
@@ -84,7 +84,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
         InputMode::TaskDetail | InputMode::HelpOverlay => "  Esc: Close",
-        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks  h/j/k/l: Scroll",
+        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  h/j/k/l: Scroll",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -484,6 +484,11 @@ fn draw_help_overlay(frame: &mut Frame) {
 }
 
 fn draw_graph_view(frame: &mut Frame, app: &App) {
+    if app.dual_pane {
+        draw_dual_pane_graph(frame, app);
+        return;
+    }
+
     // Fill the entire background
     let bg_block = Block::default().style(Style::default().bg(theme::BG));
     frame.render_widget(bg_block, frame.area());
@@ -583,8 +588,12 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
     }
 
     // Footer
+    draw_graph_footer(frame, chunks[3]);
+}
+
+fn draw_graph_footer(frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(vec![Span::styled(
-        "  Esc: Back  1: Epics  2: Tasks  h/j/k/l: Scroll",
+        "  Esc: Back  1: Epics  2: Tasks  3: Dual  Tab: Pane  h/j/k/l: Scroll",
         Style::default().fg(theme::TEXT_DIM),
     )]))
     .block(
@@ -597,7 +606,7 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
             ))
             .style(Style::default().bg(theme::BG)),
     );
-    frame.render_widget(footer, chunks[3]);
+    frame.render_widget(footer, area);
 }
 
 /// Summary statistics derived from the current graph cache.
@@ -673,6 +682,27 @@ fn graph_summary_line(cache: &GraphCache) -> Line<'static> {
 }
 
 fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
+    draw_graph_canvas_with_cache(
+        frame,
+        app,
+        area,
+        app.graph_cache.as_ref(),
+        app.graph_mode,
+        app.scroll_x,
+        app.scroll_y,
+    );
+}
+
+/// Core graph canvas rendering, parameterized for reuse in both single and dual-pane modes.
+fn draw_graph_canvas_with_cache(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    cache: Option<&GraphCache>,
+    level: GraphLevel,
+    scroll_x: usize,
+    scroll_y: usize,
+) {
     let viewport_width = area.width as usize;
     let viewport_height = area.height as usize;
 
@@ -680,7 +710,7 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    if let Some(cache) = &app.graph_cache {
+    if let Some(cache) = cache {
         // For task-level, check if there are no tasks
         if cache.level == GraphLevel::Task && app.tasks.is_empty() {
             let msg = Paragraph::new("No tasks in this epic")
@@ -740,8 +770,8 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
         // Clamp scroll offsets to valid bounds.
         let max_scroll_x = canvas_w.saturating_sub(viewport_width);
         let max_scroll_y = canvas_h.saturating_sub(viewport_height);
-        let sx = app.scroll_x.min(max_scroll_x);
-        let sy = app.scroll_y.min(max_scroll_y);
+        let sx = scroll_x.min(max_scroll_x);
+        let sy = scroll_y.min(max_scroll_y);
 
         // Blit the visible portion of the canvas to the frame.
         let lines: Vec<Line> = (0..viewport_height)
@@ -763,7 +793,7 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
 
         render_scroll_indicators(frame, area, sx, sy, max_scroll_x, max_scroll_y);
     } else {
-        let msg = match app.graph_mode {
+        let msg = match level {
             GraphLevel::Task if app.selected_epic().is_none() => "Select an epic first",
             _ => "No graph data",
         };
@@ -836,6 +866,133 @@ fn render_scroll_indicators(
             Rect::new(x_pos, y_pos, 1, 1),
         );
     }
+}
+
+fn draw_dual_pane_graph(frame: &mut Frame, app: &App) {
+    // Fill the entire background
+    let bg_block = Block::default().style(Style::default().bg(theme::BG));
+    frame.render_widget(bg_block, frame.area());
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // header
+            Constraint::Min(0),   // graph panes
+            Constraint::Length(1), // summary bar
+            Constraint::Length(3), // footer
+        ])
+        .split(frame.area());
+
+    // Header with [DUAL] indicator
+    draw_dual_header(frame, chunks[0]);
+
+    // Horizontal 50/50 split for graph panes
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    // Left pane: Epics
+    let left_focused = app.active_pane == GraphPane::Left;
+    let left_block = panel_block(" Epics ", left_focused);
+    let left_inner = left_block.inner(panes[0]);
+    frame.render_widget(left_block, panes[0]);
+    draw_graph_canvas_with_cache(
+        frame,
+        app,
+        left_inner,
+        app.epic_graph_cache.as_ref(),
+        GraphLevel::Epic,
+        app.epic_scroll_x,
+        app.epic_scroll_y,
+    );
+
+    // Right pane: Tasks
+    let right_focused = app.active_pane == GraphPane::Right;
+    let right_title = match app.selected_epic() {
+        Some(epic) => format!(" Tasks: {} ", epic.title),
+        None => " Tasks ".to_string(),
+    };
+    let right_block = panel_block(&right_title, right_focused);
+    let right_inner = right_block.inner(panes[1]);
+    frame.render_widget(right_block, panes[1]);
+    draw_graph_canvas_with_cache(
+        frame,
+        app,
+        right_inner,
+        app.task_graph_cache.as_ref(),
+        GraphLevel::Task,
+        app.task_scroll_x,
+        app.task_scroll_y,
+    );
+
+    // Summary bar
+    draw_dual_summary(frame, app, chunks[2]);
+
+    // Footer
+    draw_graph_footer(frame, chunks[3]);
+}
+
+fn draw_dual_header(frame: &mut Frame, area: Rect) {
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            "  \u{2593}\u{2593} DEPENDENCY GRAPH \u{2593}\u{2593} ",
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("\u{2502} ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled(
+            "[DUAL]",
+            Style::default()
+                .fg(theme::NEON_MAGENTA)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::panel_border(false))
+            .style(Style::default().bg(theme::BG)),
+    );
+    frame.render_widget(header, area);
+}
+
+fn cache_stats_span(label: &str, cache: Option<&GraphCache>) -> Span<'static> {
+    match cache {
+        Some(c) => {
+            let s = compute_graph_summary(c);
+            Span::styled(
+                format!("{label}: {} nodes, {} edges", s.total_nodes, s.total_edges),
+                Style::default().fg(theme::NEON_CYAN),
+            )
+        }
+        None => Span::styled(
+            format!("{label}: --"),
+            Style::default().fg(theme::TEXT_DIM),
+        ),
+    }
+}
+
+fn draw_dual_summary(frame: &mut Frame, app: &App, area: Rect) {
+    let sep = Style::default().fg(theme::TEXT_DIM);
+
+    let pane_label = match app.active_pane {
+        GraphPane::Left => "Active: Epics",
+        GraphPane::Right => "Active: Tasks",
+    };
+
+    let line = Line::from(vec![
+        Span::styled("  ", sep),
+        cache_stats_span("Epics", app.epic_graph_cache.as_ref()),
+        Span::styled(" \u{2502} ", sep),
+        cache_stats_span("Tasks", app.task_graph_cache.as_ref()),
+        Span::styled(" \u{2502} ", sep),
+        Span::styled(pane_label, Style::default().fg(theme::NEON_MAGENTA)),
+    ]);
+
+    let summary = Paragraph::new(line).style(Style::default().bg(theme::BG));
+    frame.render_widget(summary, area);
 }
 
 #[cfg(test)]
@@ -1026,5 +1183,60 @@ mod tests {
         let line = graph_summary_line(&cache);
         let done_span = line.spans.iter().find(|s| s.content.contains("done")).unwrap();
         assert_eq!(done_span.style.fg, Some(theme::NEON_GREEN));
+    }
+
+    // ==================== Dual summary tests ====================
+
+    fn dual_summary_text(
+        epic_cache: Option<&GraphCache>,
+        task_cache: Option<&GraphCache>,
+        active_pane: GraphPane,
+    ) -> String {
+        let sep = Style::default().fg(theme::TEXT_DIM);
+        let pane_label = match active_pane {
+            GraphPane::Left => "Active: Epics",
+            GraphPane::Right => "Active: Tasks",
+        };
+
+        let spans = vec![
+            Span::styled("  ", sep),
+            cache_stats_span("Epics", epic_cache),
+            Span::styled(" \u{2502} ", sep),
+            cache_stats_span("Tasks", task_cache),
+            Span::styled(" \u{2502} ", sep),
+            Span::styled(pane_label, Style::default().fg(theme::NEON_MAGENTA)),
+        ];
+
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn dual_summary_renders_both_pane_stats() {
+        let epic_cache = test_cache(
+            vec![test_node("A", ItemStatus::Todo), test_node("B", ItemStatus::Done)],
+            vec![test_edge("A", "B")],
+            GraphLevel::Epic,
+        );
+        let task_cache = test_cache(
+            vec![test_node("T1", ItemStatus::Todo)],
+            vec![],
+            GraphLevel::Task,
+        );
+        let text = dual_summary_text(Some(&epic_cache), Some(&task_cache), GraphPane::Left);
+        assert!(text.contains("Epics: 2 nodes, 1 edges"), "got: {text}");
+        assert!(text.contains("Tasks: 1 nodes, 0 edges"), "got: {text}");
+        assert!(text.contains("Active: Epics"), "got: {text}");
+    }
+
+    #[test]
+    fn dual_summary_shows_dashes_when_task_cache_none() {
+        let epic_cache = test_cache(
+            vec![test_node("A", ItemStatus::Todo)],
+            vec![],
+            GraphLevel::Epic,
+        );
+        let text = dual_summary_text(Some(&epic_cache), None, GraphPane::Right);
+        assert!(text.contains("Tasks: --"), "got: {text}");
+        assert!(text.contains("Active: Tasks"), "got: {text}");
     }
 }

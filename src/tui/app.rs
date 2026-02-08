@@ -36,6 +36,12 @@ pub enum GraphLevel {
     Task,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphPane {
+    Left,
+    Right,
+}
+
 /// Cached graph layout data (recomputed only when data changes).
 pub struct GraphCache {
     pub layout: DagLayout,
@@ -80,6 +86,14 @@ pub struct App {
     pub graph_cache: Option<GraphCache>,
     pub scroll_x: usize,
     pub scroll_y: usize,
+    pub dual_pane: bool,
+    pub active_pane: GraphPane,
+    pub epic_graph_cache: Option<GraphCache>,
+    pub task_graph_cache: Option<GraphCache>,
+    pub epic_scroll_x: usize,
+    pub epic_scroll_y: usize,
+    pub task_scroll_x: usize,
+    pub task_scroll_y: usize,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -154,6 +168,14 @@ impl App {
             graph_cache: None,
             scroll_x: 0,
             scroll_y: 0,
+            dual_pane: false,
+            active_pane: GraphPane::Left,
+            epic_graph_cache: None,
+            task_graph_cache: None,
+            epic_scroll_x: 0,
+            epic_scroll_y: 0,
+            task_scroll_x: 0,
+            task_scroll_y: 0,
         };
         app.refresh_data();
         Ok(app)
@@ -222,8 +244,10 @@ impl App {
         self.refresh_tasks();
         self.refresh_status_and_deps();
 
-        // Invalidate graph cache so it gets rebuilt on next draw
+        // Invalidate graph caches so they get rebuilt on next draw
         self.graph_cache = None;
+        self.epic_graph_cache = None;
+        self.task_graph_cache = None;
     }
 
     fn refresh_status_and_deps(&mut self) {
@@ -338,34 +362,74 @@ impl App {
     fn handle_graph_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                self.mode = InputMode::Normal;
+                if self.dual_pane {
+                    self.exit_dual_to_single_epic();
+                } else {
+                    self.mode = InputMode::Normal;
+                }
             }
             KeyCode::Char('1') => {
-                if self.graph_mode != GraphLevel::Epic {
-                    self.reset_scroll();
-                    self.graph_mode = GraphLevel::Epic;
-                    self.build_epic_graph();
+                if self.dual_pane || self.graph_mode != GraphLevel::Epic {
+                    self.exit_dual_to_single_epic();
                 }
             }
             KeyCode::Char('2') => {
+                self.dual_pane = false;
                 self.reset_scroll();
                 self.graph_mode = GraphLevel::Task;
                 self.build_task_graph();
             }
+            KeyCode::Char('3') => {
+                if self.dual_pane {
+                    self.exit_dual_to_single_epic();
+                } else {
+                    self.dual_pane = true;
+                    self.active_pane = GraphPane::Left;
+                    self.build_dual_graphs();
+                }
+            }
+            KeyCode::Tab if self.dual_pane => {
+                self.active_pane = match self.active_pane {
+                    GraphPane::Left => GraphPane::Right,
+                    GraphPane::Right => GraphPane::Left,
+                };
+            }
             KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_y = self.scroll_y.saturating_add(1);
+                let (_, sy) = self.active_scroll_mut();
+                *sy = sy.saturating_add(1);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_y = self.scroll_y.saturating_sub(1);
+                let (_, sy) = self.active_scroll_mut();
+                *sy = sy.saturating_sub(1);
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                self.scroll_x = self.scroll_x.saturating_add(1);
+                let (sx, _) = self.active_scroll_mut();
+                *sx = sx.saturating_add(1);
             }
             KeyCode::Char('h') | KeyCode::Left => {
-                self.scroll_x = self.scroll_x.saturating_sub(1);
+                let (sx, _) = self.active_scroll_mut();
+                *sx = sx.saturating_sub(1);
             }
             _ => {}
         }
+    }
+
+    fn active_scroll_mut(&mut self) -> (&mut usize, &mut usize) {
+        if self.dual_pane {
+            match self.active_pane {
+                GraphPane::Left => (&mut self.epic_scroll_x, &mut self.epic_scroll_y),
+                GraphPane::Right => (&mut self.task_scroll_x, &mut self.task_scroll_y),
+            }
+        } else {
+            (&mut self.scroll_x, &mut self.scroll_y)
+        }
+    }
+
+    fn exit_dual_to_single_epic(&mut self) {
+        self.dual_pane = false;
+        self.reset_scroll();
+        self.graph_mode = GraphLevel::Epic;
+        self.build_epic_graph();
     }
 
     pub fn build_epic_graph(&mut self) {
@@ -387,6 +451,19 @@ impl App {
         );
 
         self.graph_cache = Some(build_graph_cache(nodes, edges, NODE_HEIGHT_EPIC, GraphLevel::Epic));
+    }
+
+    pub fn build_dual_graphs(&mut self) {
+        self.build_epic_graph();
+        self.epic_graph_cache = self.graph_cache.take();
+
+        self.build_task_graph();
+        self.task_graph_cache = self.graph_cache.take();
+
+        self.epic_scroll_x = 0;
+        self.epic_scroll_y = 0;
+        self.task_scroll_x = 0;
+        self.task_scroll_y = 0;
     }
 
     pub fn build_task_graph(&mut self) {
@@ -1686,5 +1763,126 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         assert_eq!(app.scroll_x, 0);
         assert_eq!(app.scroll_y, 0);
+    }
+
+    // ==================== Dual-pane tests ====================
+
+    #[test]
+    fn key_3_toggles_dual_pane_on_off() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(!app.dual_pane);
+
+        // Toggle on
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.dual_pane);
+        assert_eq!(app.active_pane, GraphPane::Left);
+        assert!(app.epic_graph_cache.is_some());
+
+        // Toggle off
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(!app.dual_pane);
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+    }
+
+    #[test]
+    fn tab_switches_active_pane_in_dual_mode() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert_eq!(app.active_pane, GraphPane::Left);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.active_pane, GraphPane::Right);
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.active_pane, GraphPane::Left);
+    }
+
+    #[test]
+    fn tab_noop_in_single_graph_mode() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(!app.dual_pane);
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+
+        // Tab in single graph mode should do nothing (no Tab handler for single)
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.mode, InputMode::GraphView);
+        assert!(!app.dual_pane);
+    }
+
+    #[test]
+    fn dual_scroll_routes_to_active_pane() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+
+        // Active pane is Left (epics)
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.epic_scroll_y, 1);
+        assert_eq!(app.task_scroll_y, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.epic_scroll_x, 1);
+        assert_eq!(app.task_scroll_x, 0);
+
+        // Switch to right pane
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.task_scroll_y, 1);
+        assert_eq!(app.epic_scroll_y, 1); // unchanged
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.task_scroll_x, 1);
+        assert_eq!(app.epic_scroll_x, 1); // unchanged
+    }
+
+    #[test]
+    fn key_1_in_dual_exits_to_single_epic() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.dual_pane);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert!(!app.dual_pane);
+        assert_eq!(app.graph_mode, GraphLevel::Epic);
+    }
+
+    #[test]
+    fn key_2_in_dual_exits_to_single_task() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.dual_pane);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert!(!app.dual_pane);
+        assert_eq!(app.graph_mode, GraphLevel::Task);
+    }
+
+    #[test]
+    fn esc_in_dual_returns_to_single_not_normal() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.dual_pane);
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(!app.dual_pane);
+        assert_eq!(app.mode, InputMode::GraphView);
+    }
+
+    #[test]
+    fn dual_caches_invalidated_on_refresh() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.epic_graph_cache.is_some());
+
+        app.refresh_data();
+        assert!(app.epic_graph_cache.is_none());
+        assert!(app.task_graph_cache.is_none());
     }
 }
