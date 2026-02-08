@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::io::Stdout;
 use std::time::{Duration, Instant};
@@ -111,6 +112,11 @@ pub struct App {
     pub task_focused_node: Option<String>,
     /// Viewport size (width, height) for auto-scroll, updated each frame.
     pub graph_viewport_size: (u16, u16),
+    /// Max scroll bounds, updated each frame by the render function.
+    /// Used to clamp scroll values so they don't exceed canvas limits.
+    pub max_scroll: Cell<(usize, usize)>,
+    pub epic_max_scroll: Cell<(usize, usize)>,
+    pub task_max_scroll: Cell<(usize, usize)>,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -199,6 +205,9 @@ impl App {
             epic_focused_node: None,
             task_focused_node: None,
             graph_viewport_size: (0, 0),
+            max_scroll: Cell::new((0, 0)),
+            epic_max_scroll: Cell::new((0, 0)),
+            task_max_scroll: Cell::new((0, 0)),
         };
         app.refresh_data();
         Ok(app)
@@ -454,22 +463,35 @@ impl App {
             }
             // hjkl: viewport panning
             KeyCode::Char('j') => {
+                let (_, max_y) = self.active_max_scroll();
                 let (_, sy) = self.active_scroll_mut();
-                *sy = sy.saturating_add(1);
+                *sy = sy.saturating_add(1).min(max_y);
             }
             KeyCode::Char('k') => {
                 let (_, sy) = self.active_scroll_mut();
                 *sy = sy.saturating_sub(1);
             }
             KeyCode::Char('l') => {
+                let (max_x, _) = self.active_max_scroll();
                 let (sx, _) = self.active_scroll_mut();
-                *sx = sx.saturating_add(1);
+                *sx = sx.saturating_add(1).min(max_x);
             }
             KeyCode::Char('h') => {
                 let (sx, _) = self.active_scroll_mut();
                 *sx = sx.saturating_sub(1);
             }
             _ => {}
+        }
+    }
+
+    fn active_max_scroll(&self) -> (usize, usize) {
+        if self.dual_pane {
+            match self.active_pane {
+                GraphPane::Left => self.epic_max_scroll.get(),
+                GraphPane::Right => self.task_max_scroll.get(),
+            }
+        } else {
+            self.max_scroll.get()
         }
     }
 
@@ -1951,6 +1973,7 @@ mod tests {
         let (mut app, _dir) = app_with_epics(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         assert_eq!(app.mode, InputMode::GraphView);
+        app.max_scroll.set((100, 100));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('j')));
         assert_eq!(app.scroll_y, 1);
@@ -1964,6 +1987,7 @@ mod tests {
     fn scroll_h_l_adjusts_scroll_x() {
         let (mut app, _dir) = app_with_epics(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((100, 100));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('l')));
         assert_eq!(app.scroll_x, 1);
@@ -1984,6 +2008,7 @@ mod tests {
         assert_eq!(app.scroll_y, 0, "scroll_y should not change from arrow keys (unless auto-scroll)");
 
         // hjkl should still scroll
+        app.max_scroll.set((100, 100));
         app.handle_key(KeyEvent::from(KeyCode::Char('j')));
         assert_eq!(app.scroll_y, 1, "j should scroll");
     }
@@ -2009,9 +2034,42 @@ mod tests {
     }
 
     #[test]
+    fn scroll_j_clamped_to_max_scroll() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((5, 3));
+
+        // Press j 10 times — should clamp at 3
+        for _ in 0..10 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        assert_eq!(app.scroll_y, 3);
+
+        // First k should immediately move the view
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.scroll_y, 2);
+    }
+
+    #[test]
+    fn scroll_l_clamped_to_max_scroll() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((3, 5));
+
+        for _ in 0..10 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        }
+        assert_eq!(app.scroll_x, 3);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.scroll_x, 2);
+    }
+
+    #[test]
     fn scroll_resets_on_view_switch_1() {
         let (mut app, _dir) = app_with_tasks(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((100, 100));
 
         // Scroll down
         app.handle_key(KeyEvent::from(KeyCode::Char('j')));
@@ -2029,6 +2087,7 @@ mod tests {
     fn scroll_resets_on_view_switch_2() {
         let (mut app, _dir) = app_with_tasks(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((100, 100));
 
         // Switch to task then scroll
         app.handle_key(KeyEvent::from(KeyCode::Char('2')));
@@ -2107,6 +2166,8 @@ mod tests {
         let (mut app, _dir) = app_with_tasks(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        app.epic_max_scroll.set((100, 100));
+        app.task_max_scroll.set((100, 100));
 
         // Active pane is Left (epics)
         app.handle_key(KeyEvent::from(KeyCode::Char('j')));
@@ -2341,6 +2402,7 @@ mod tests {
     fn hjkl_still_scrolls_in_graph_view() {
         let (mut app, _dir) = app_with_epics(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.max_scroll.set((100, 100));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('j')));
         assert_eq!(app.scroll_y, 1);

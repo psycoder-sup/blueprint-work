@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -13,6 +14,17 @@ use crate::tui::graph_render::{
     NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
 };
 use crate::tui::theme;
+
+/// Bundles the per-pane graph rendering parameters so callers don't need to
+/// pass many individual fields.
+struct GraphPaneParams<'a> {
+    cache: Option<&'a GraphCache>,
+    level: GraphLevel,
+    scroll_x: usize,
+    scroll_y: usize,
+    focused_node_id: Option<&'a str>,
+    max_scroll_out: &'a Cell<(usize, usize)>,
+}
 
 pub fn draw(frame: &mut Frame, app: &App) {
     if app.mode == InputMode::GraphView {
@@ -133,6 +145,11 @@ fn selection_styles(is_selected: bool) -> (&'static str, Style, Style) {
     (marker, marker_style, title_style)
 }
 
+/// Returns a dim `[short_id] ` span if present, or `None`.
+fn short_id_span(short_id: Option<&str>) -> Option<Span<'static>> {
+    short_id.map(|sid| Span::styled(format!("[{sid}] "), Style::default().fg(theme::TEXT_DIM)))
+}
+
 /// Creates a styled panel block with the given title.
 fn panel_block(title: &str, focused: bool) -> Block<'_> {
     let title_fg = if focused {
@@ -164,8 +181,9 @@ fn draw_epic_list(frame: &mut Frame, app: &App, area: Rect) {
             let mut spans = vec![
                 Span::styled(marker, marker_style),
                 Span::styled(format!("{symbol} "), status_style),
-                Span::styled(&epic.title, title_style),
             ];
+            spans.extend(short_id_span(epic.short_id.as_deref()));
+            spans.push(Span::styled(&epic.title, title_style));
 
             if app.blocked_epic_ids.contains(&epic.id) {
                 spans.push(Span::styled(
@@ -224,8 +242,9 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
             let mut spans = vec![
                 Span::styled(marker, marker_style),
                 Span::styled(format!("{symbol} "), status_style),
-                Span::styled(&task.title, title_style),
             ];
+            spans.extend(short_id_span(task.short_id.as_deref()));
+            spans.push(Span::styled(&task.title, title_style));
 
             if app.blocked_task_ids.contains(&task.id) {
                 spans.push(Span::styled(
@@ -256,13 +275,17 @@ fn draw_task_detail(frame: &mut Frame, app: &App) {
 
     let symbol = theme::status_symbol(&task.status);
 
+    let mut header_spans: Vec<Span> = Vec::new();
+    header_spans.extend(short_id_span(task.short_id.as_deref()));
+    header_spans.push(Span::styled(
+        &task.title,
+        Style::default()
+            .fg(theme::NEON_CYAN)
+            .add_modifier(Modifier::BOLD),
+    ));
+
     let mut lines = vec![
-        Line::from(Span::styled(
-            &task.title,
-            Style::default()
-                .fg(theme::NEON_CYAN)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(header_spans),
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -683,30 +706,19 @@ fn graph_summary_line(cache: &GraphCache) -> Line<'static> {
 }
 
 fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
-    draw_graph_canvas_with_cache(
-        frame,
-        app,
-        area,
-        app.graph_cache.as_ref(),
-        app.graph_mode,
-        app.scroll_x,
-        app.scroll_y,
-        app.focused_node.as_deref(),
-    );
+    let params = GraphPaneParams {
+        cache: app.graph_cache.as_ref(),
+        level: app.graph_mode,
+        scroll_x: app.scroll_x,
+        scroll_y: app.scroll_y,
+        focused_node_id: app.focused_node.as_deref(),
+        max_scroll_out: &app.max_scroll,
+    };
+    draw_graph_pane(frame, app, area, &params);
 }
 
 /// Core graph canvas rendering, parameterized for reuse in both single and dual-pane modes.
-#[allow(clippy::too_many_arguments)]
-fn draw_graph_canvas_with_cache(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    cache: Option<&GraphCache>,
-    level: GraphLevel,
-    scroll_x: usize,
-    scroll_y: usize,
-    focused_node_id: Option<&str>,
-) {
+fn draw_graph_pane(frame: &mut Frame, app: &App, area: Rect, params: &GraphPaneParams) {
     let viewport_width = area.width as usize;
     let viewport_height = area.height as usize;
 
@@ -714,7 +726,7 @@ fn draw_graph_canvas_with_cache(
         return;
     }
 
-    if let Some(cache) = cache {
+    if let Some(cache) = params.cache {
         // For task-level, check if there are no tasks
         if cache.level == GraphLevel::Task && app.tasks.is_empty() {
             let msg = Paragraph::new("No tasks in this epic")
@@ -783,7 +795,7 @@ fn draw_graph_canvas_with_cache(
         );
 
         // Render focus highlight on the selected node
-        if let Some(fid) = focused_node_id
+        if let Some(fid) = params.focused_node_id
             && let Some(&(fx, fy)) = cache.node_positions.get(fid)
         {
             let fh = per_node_heights.get(fid).copied().unwrap_or(default_height);
@@ -793,8 +805,9 @@ fn draw_graph_canvas_with_cache(
         // Clamp scroll offsets to valid bounds.
         let max_scroll_x = canvas_w.saturating_sub(viewport_width);
         let max_scroll_y = canvas_h.saturating_sub(viewport_height);
-        let sx = scroll_x.min(max_scroll_x);
-        let sy = scroll_y.min(max_scroll_y);
+        params.max_scroll_out.set((max_scroll_x, max_scroll_y));
+        let sx = params.scroll_x.min(max_scroll_x);
+        let sy = params.scroll_y.min(max_scroll_y);
 
         // Blit the visible portion of the canvas to the frame.
         let lines: Vec<Line> = (0..viewport_height)
@@ -816,7 +829,7 @@ fn draw_graph_canvas_with_cache(
 
         render_scroll_indicators(frame, area, sx, sy, max_scroll_x, max_scroll_y);
     } else {
-        let msg = match level {
+        let msg = match params.level {
             GraphLevel::Task if app.selected_epic().is_none() => "Select an epic first",
             _ => "No graph data",
         };
@@ -925,16 +938,14 @@ fn draw_dual_pane_graph(frame: &mut Frame, app: &App) {
     let left_block = panel_block(" Epics ", left_focused);
     let left_inner = left_block.inner(panes[0]);
     frame.render_widget(left_block, panes[0]);
-    draw_graph_canvas_with_cache(
-        frame,
-        app,
-        left_inner,
-        app.epic_graph_cache.as_ref(),
-        GraphLevel::Epic,
-        app.epic_scroll_x,
-        app.epic_scroll_y,
-        app.epic_focused_node.as_deref(),
-    );
+    draw_graph_pane(frame, app, left_inner, &GraphPaneParams {
+        cache: app.epic_graph_cache.as_ref(),
+        level: GraphLevel::Epic,
+        scroll_x: app.epic_scroll_x,
+        scroll_y: app.epic_scroll_y,
+        focused_node_id: app.epic_focused_node.as_deref(),
+        max_scroll_out: &app.epic_max_scroll,
+    });
 
     // Right pane: Tasks
     let right_focused = app.active_pane == GraphPane::Right;
@@ -945,16 +956,14 @@ fn draw_dual_pane_graph(frame: &mut Frame, app: &App) {
     let right_block = panel_block(&right_title, right_focused);
     let right_inner = right_block.inner(panes[1]);
     frame.render_widget(right_block, panes[1]);
-    draw_graph_canvas_with_cache(
-        frame,
-        app,
-        right_inner,
-        app.task_graph_cache.as_ref(),
-        GraphLevel::Task,
-        app.task_scroll_x,
-        app.task_scroll_y,
-        app.task_focused_node.as_deref(),
-    );
+    draw_graph_pane(frame, app, right_inner, &GraphPaneParams {
+        cache: app.task_graph_cache.as_ref(),
+        level: GraphLevel::Task,
+        scroll_x: app.task_scroll_x,
+        scroll_y: app.task_scroll_y,
+        focused_node_id: app.task_focused_node.as_deref(),
+        max_scroll_out: &app.task_max_scroll,
+    });
 
     // Summary bar
     draw_dual_summary(frame, app, chunks[2]);
@@ -1268,5 +1277,166 @@ mod tests {
         let text = dual_summary_text(Some(&epic_cache), None, GraphPane::Right);
         assert!(text.contains("Tasks: --"), "got: {text}");
         assert!(text.contains("Active: Tasks"), "got: {text}");
+    }
+
+    // ── Short-ID display tests ────────────────────────────────────────
+
+    use crate::models::{BlueTask, Epic};
+
+    fn epic_row_spans(epic: &Epic, is_selected: bool) -> Vec<Span<'_>> {
+        let (marker, marker_style, title_style) = selection_styles(is_selected);
+        let symbol = theme::status_symbol(&epic.status);
+        let status_style = theme::status_style(&epic.status);
+
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(format!("{symbol} "), status_style),
+        ];
+        spans.extend(short_id_span(epic.short_id.as_deref()));
+        spans.push(Span::styled(&epic.title, title_style));
+        spans
+    }
+
+    fn task_row_spans(task: &BlueTask, is_selected: bool) -> Vec<Span<'_>> {
+        let (marker, marker_style, title_style) = selection_styles(is_selected);
+        let symbol = theme::status_symbol(&task.status);
+        let status_style = theme::status_style(&task.status);
+
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(format!("{symbol} "), status_style),
+        ];
+        spans.extend(short_id_span(task.short_id.as_deref()));
+        spans.push(Span::styled(&task.title, title_style));
+        spans
+    }
+
+    fn task_detail_header_spans(task: &BlueTask) -> Vec<Span<'_>> {
+        let mut spans: Vec<Span> = Vec::new();
+        spans.extend(short_id_span(task.short_id.as_deref()));
+        spans.push(Span::styled(
+            &task.title,
+            Style::default()
+                .fg(theme::NEON_CYAN)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans
+    }
+
+    fn stub_epic(short_id: Option<&str>) -> Epic {
+        Epic {
+            id: "e1".into(),
+            project_id: "p1".into(),
+            title: "Test Epic".into(),
+            description: String::new(),
+            status: ItemStatus::Todo,
+            short_id: short_id.map(String::from),
+            created_at: String::new(),
+            updated_at: String::new(),
+            task_count: 0,
+            done_count: 0,
+        }
+    }
+
+    fn stub_task(short_id: Option<&str>) -> BlueTask {
+        BlueTask {
+            id: "t1".into(),
+            epic_id: "e1".into(),
+            title: "Test Task".into(),
+            description: String::new(),
+            status: ItemStatus::Todo,
+            short_id: short_id.map(String::from),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn epic_list_shows_short_id_before_title() {
+        let epic = stub_epic(Some("E1"));
+        let spans = epic_row_spans(&epic, true);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("[E1] Test Epic"),
+            "short ID should precede title, got: {text}"
+        );
+    }
+
+    #[test]
+    fn task_list_shows_short_id_before_title() {
+        let task = stub_task(Some("E1-T3"));
+        let spans = task_row_spans(&task, true);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("[E1-T3] Test Task"),
+            "short ID should precede title, got: {text}"
+        );
+    }
+
+    #[test]
+    fn no_short_id_span_when_none() {
+        let epic = stub_epic(None);
+        let spans = epic_row_spans(&epic, false);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !text.contains('['),
+            "no bracket should appear when short_id is None, got: {text}"
+        );
+
+        let task = stub_task(None);
+        let spans = task_row_spans(&task, false);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !text.contains('['),
+            "no bracket should appear when short_id is None, got: {text}"
+        );
+    }
+
+    #[test]
+    fn short_id_span_uses_text_dim_color() {
+        let epic = stub_epic(Some("E1"));
+        let spans = epic_row_spans(&epic, true);
+        let sid_span = spans.iter().find(|s| s.content.contains("[E1]")).unwrap();
+        assert_eq!(
+            sid_span.style.fg,
+            Some(theme::TEXT_DIM),
+            "short ID span should use TEXT_DIM"
+        );
+
+        let task = stub_task(Some("E1-T3"));
+        let spans = task_row_spans(&task, true);
+        let sid_span = spans
+            .iter()
+            .find(|s| s.content.contains("[E1-T3]"))
+            .unwrap();
+        assert_eq!(
+            sid_span.style.fg,
+            Some(theme::TEXT_DIM),
+            "short ID span should use TEXT_DIM"
+        );
+    }
+
+    #[test]
+    fn task_detail_header_shows_short_id() {
+        let task = stub_task(Some("E2-T5"));
+        let spans = task_detail_header_spans(&task);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("[E2-T5] Test Task"),
+            "detail header should show short ID, got: {text}"
+        );
+        let sid_span = spans
+            .iter()
+            .find(|s| s.content.contains("[E2-T5]"))
+            .unwrap();
+        assert_eq!(sid_span.style.fg, Some(theme::TEXT_DIM));
+    }
+
+    #[test]
+    fn task_detail_header_no_short_id_when_none() {
+        let task = stub_task(None);
+        let spans = task_detail_header_spans(&task);
+        assert_eq!(spans.len(), 1, "only the title span when short_id is None");
+        assert_eq!(spans[0].content.as_ref(), "Test Task");
     }
 }
