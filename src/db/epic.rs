@@ -209,14 +209,14 @@ pub fn resolve_epic_id(
                         .query_map([short.as_str()], |row| row.get(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()
                         .context("failed to resolve epic short ID")?;
-                    match ids.len() {
-                        0 => anyhow::bail!("Epic not found: {id_or_short}"),
-                        1 => Ok(ids.into_iter().next().unwrap()),
-                        _ => anyhow::bail!(
+                    match ids.as_slice() {
+                        [] => anyhow::bail!("Epic not found: {id_or_short}"),
+                        [single] => Ok(single.clone()),
+                        multiple => anyhow::bail!(
                             "Ambiguous short ID '{}': matches {} epics across projects. \
                              Provide a default project or use the full ULID.",
                             id_or_short,
-                            ids.len()
+                            multiple.len()
                         ),
                     }
                 }

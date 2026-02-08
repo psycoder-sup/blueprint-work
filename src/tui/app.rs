@@ -686,16 +686,20 @@ impl App {
         self.build_epic_graph();
     }
 
+    fn node_label(short_id: &Option<String>, title: &str) -> String {
+        match short_id {
+            Some(sid) => format!("[{sid}] {title}"),
+            None => title.to_string(),
+        }
+    }
+
     pub fn build_epic_graph(&mut self) {
         let nodes: Vec<Node> = self
             .epics
             .iter()
             .map(|e| Node {
                 id: e.id.clone(),
-                label: match &e.short_id {
-                    Some(sid) => format!("[{sid}] {}", e.title),
-                    None => e.title.clone(),
-                },
+                label: Self::node_label(&e.short_id, &e.title),
                 status: e.status.clone(),
                 layer: None,
                 x_position: 0,
@@ -734,10 +738,7 @@ impl App {
             .iter()
             .map(|t| Node {
                 id: t.id.clone(),
-                label: match &t.short_id {
-                    Some(sid) => format!("[{sid}] {}", t.title),
-                    None => t.title.clone(),
-                },
+                label: Self::node_label(&t.short_id, &t.title),
                 status: t.status.clone(),
                 layer: None,
                 x_position: 0,

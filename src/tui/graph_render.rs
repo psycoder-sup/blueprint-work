@@ -291,11 +291,11 @@ pub fn node_height(title: &str, has_progress: bool) -> usize {
 pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8) {
     let is_marching = node_box.status == ItemStatus::InProgress && !node_box.blocked;
 
-    let node_height = node_height(&node_box.title, node_box.progress.is_some());
+    let height = node_height(&node_box.title, node_box.progress.is_some());
 
     if is_marching {
         // Positionally-aware marching border
-        render_marching_border(canvas, node_box.x, node_box.y, node_height, animation_frame);
+        render_marching_border(canvas, node_box.x, node_box.y, height, animation_frame);
     } else {
         // Uniform border for Todo / Done / blocked
         let bstyle = border_style(&node_box.status, animation_frame, node_box.blocked);
@@ -311,8 +311,8 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
         canvas.put_char(x + NODE_WIDTH - 1, y, bc.tr, bstyle);
 
         // Side borders for inner rows
-        let bottom_y = y + node_height - 1;
-        for row in 1..node_height - 1 {
+        let bottom_y = y + height - 1;
+        for row in 1..height - 1 {
             canvas.put_char(x, y + row, bc.v, bstyle);
             canvas.put_char(x + NODE_WIDTH - 1, y + row, bc.v, bstyle);
         }
@@ -341,7 +341,7 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     let symbol = theme::status_symbol(&node_box.status);
     let sym_style = theme::status_style(&node_box.status);
 
-    let symbol_display_width: usize = 1;
+    const SYMBOL_WIDTH: usize = 1;
 
     let title_chars: Vec<char> = node_box.title.chars().collect();
     let needs_two_lines = title_chars.len() > TITLE_BUDGET;
@@ -362,15 +362,15 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     canvas.put_str(symbol_x, title_y, symbol, sym_style);
 
     // Space after symbol
-    canvas.put_char(symbol_x + symbol_display_width, title_y, ' ', content_style);
+    canvas.put_char(symbol_x + SYMBOL_WIDTH, title_y, ' ', content_style);
 
     // Title text (line 1)
-    let title_x = symbol_x + symbol_display_width + 1;
+    let title_x = symbol_x + SYMBOL_WIDTH + 1;
     let title_style = Style::default().fg(theme::TEXT_BRIGHT);
     canvas.put_str(title_x, title_y, &line1, title_style);
 
     // Fill remaining inner space on line 1
-    let used = 1 + symbol_display_width + 1 + line1.chars().count();
+    let used = 1 + SYMBOL_WIDTH + 1 + line1.chars().count();
     for i in used..INNER_WIDTH {
         canvas.put_char(x + 1 + i, title_y, ' ', content_style);
     }
@@ -379,7 +379,7 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     if let Some(ref l2) = line2 {
         let title_y2 = title_y + 1;
         // Indent to align with title_x
-        let prefix_len = 1 + symbol_display_width + 1; // leading space + symbol + space
+        let prefix_len = 1 + SYMBOL_WIDTH + 1; // leading space + symbol + space
         for i in 0..prefix_len {
             canvas.put_char(x + 1 + i, title_y2, ' ', content_style);
         }
