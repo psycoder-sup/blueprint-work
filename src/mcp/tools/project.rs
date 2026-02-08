@@ -143,6 +143,7 @@ mod tests {
             "create_project",
             &json!({"name": "Test", "description": "A project"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -161,6 +162,7 @@ mod tests {
             "create_project",
             &json!({"description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -178,6 +180,7 @@ mod tests {
             "create_project",
             &json!({"name": "Test"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -193,7 +196,7 @@ mod tests {
     #[test]
     fn test_list_projects_empty() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_projects", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_projects", &json!({}), &db, None).unwrap();
 
         assert!(result.get("isError").is_none());
         let projects = parse_response(&result);
@@ -207,14 +210,16 @@ mod tests {
             "create_project",
             &json!({"name": "P1", "description": "d1"}),
             &db,
+            None,
         );
         dispatch_tool(
             "create_project",
             &json!({"name": "P2", "description": "d2"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_projects", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_projects", &json!({}), &db, None).unwrap();
         let projects = parse_response(&result);
         assert_eq!(projects.as_array().unwrap().len(), 2);
     }
@@ -226,6 +231,7 @@ mod tests {
             "create_project",
             &json!({"name": "Active", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let project = parse_response(&create_result);
@@ -236,6 +242,7 @@ mod tests {
             "update_project",
             &json!({"id": id, "status": "archived"}),
             &db,
+            None,
         );
 
         // Create another active project
@@ -243,15 +250,16 @@ mod tests {
             "create_project",
             &json!({"name": "Still Active", "description": "d"}),
             &db,
+            None,
         );
 
-        let active = dispatch_tool("list_projects", &json!({"status": "active"}), &db).unwrap();
+        let active = dispatch_tool("list_projects", &json!({"status": "active"}), &db, None).unwrap();
         let projects = parse_response(&active);
         assert_eq!(projects.as_array().unwrap().len(), 1);
         assert_eq!(projects[0]["name"], "Still Active");
 
         let archived =
-            dispatch_tool("list_projects", &json!({"status": "archived"}), &db).unwrap();
+            dispatch_tool("list_projects", &json!({"status": "archived"}), &db, None).unwrap();
         let projects = parse_response(&archived);
         assert_eq!(projects.as_array().unwrap().len(), 1);
         assert_eq!(projects[0]["name"], "Active");
@@ -260,7 +268,7 @@ mod tests {
     #[test]
     fn test_list_projects_invalid_status() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_projects", &json!({"status": "bogus"}), &db).unwrap();
+        let result = dispatch_tool("list_projects", &json!({"status": "bogus"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -277,12 +285,13 @@ mod tests {
             "create_project",
             &json!({"name": "Get Me", "description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
         let id = created["id"].as_str().unwrap();
 
-        let result = dispatch_tool("get_project", &json!({"id": id}), &db).unwrap();
+        let result = dispatch_tool("get_project", &json!({"id": id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["project"]["name"], "Get Me");
@@ -296,6 +305,7 @@ mod tests {
             "create_project",
             &json!({"name": "Parent", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -312,7 +322,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = dispatch_tool("get_project", &json!({"id": project_id}), &db).unwrap();
+        let result = dispatch_tool("get_project", &json!({"id": project_id}), &db, None).unwrap();
         let data = parse_response(&result);
         assert_eq!(data["epics"].as_array().unwrap().len(), 1);
         assert_eq!(data["epics"][0]["title"], "Child Epic");
@@ -321,7 +331,7 @@ mod tests {
     #[test]
     fn test_get_project_not_found() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_project", &json!({"id": "nonexistent"}), &db).unwrap();
+        let result = dispatch_tool("get_project", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -332,7 +342,7 @@ mod tests {
     #[test]
     fn test_get_project_missing_id() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_project", &json!({}), &db).unwrap();
+        let result = dispatch_tool("get_project", &json!({}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -349,6 +359,7 @@ mod tests {
             "create_project",
             &json!({"name": "Original", "description": "old desc"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -358,6 +369,7 @@ mod tests {
             "update_project",
             &json!({"id": id, "name": "Renamed", "status": "archived"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -375,6 +387,7 @@ mod tests {
             "update_project",
             &json!({"id": "nonexistent", "name": "X"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -393,18 +406,19 @@ mod tests {
             "create_project",
             &json!({"name": "To Delete", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
         let id = created["id"].as_str().unwrap();
 
-        let result = dispatch_tool("delete_project", &json!({"id": id}), &db).unwrap();
+        let result = dispatch_tool("delete_project", &json!({"id": id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["deleted"], true);
 
         // Verify it's gone
-        let get_result = dispatch_tool("get_project", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_project", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
     }
 
@@ -412,7 +426,7 @@ mod tests {
     fn test_delete_project_not_found() {
         let (db, _dir) = test_db();
         let result =
-            dispatch_tool("delete_project", &json!({"id": "nonexistent"}), &db).unwrap();
+            dispatch_tool("delete_project", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -427,6 +441,7 @@ mod tests {
             "create_project",
             &json!({"name": "Parent", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -444,7 +459,7 @@ mod tests {
         .unwrap();
 
         // Delete the project
-        dispatch_tool("delete_project", &json!({"id": project_id}), &db).unwrap();
+        dispatch_tool("delete_project", &json!({"id": project_id}), &db, None).unwrap();
 
         // Verify epics are gone
         let epics = epic_db::list_epics(&db, Some(project_id), None).unwrap();

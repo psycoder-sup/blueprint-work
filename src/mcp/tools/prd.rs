@@ -5,12 +5,18 @@ use crate::db::project as project_db;
 use crate::db::Database;
 use crate::models::prd::CreatePrdInput;
 
-use super::{require_str, tool_error, tool_result};
+use super::{optional_str, require_str, tool_error, tool_result};
 
-pub(super) fn handle_feed_prd(args: &Value, db: &Database) -> Value {
-    let project_id = match require_str(args, "project_id") {
-        Ok(v) => v,
-        Err(e) => return e,
+pub(super) fn handle_feed_prd(
+    args: &Value,
+    db: &Database,
+    default_project_id: Option<&str>,
+) -> Value {
+    let project_id = match optional_str(args, "project_id")
+        .or_else(|| default_project_id.map(String::from))
+    {
+        Some(v) => v,
+        None => return tool_error("Missing required parameter: project_id"),
     };
     let title = match require_str(args, "title") {
         Ok(v) => v,
@@ -104,6 +110,7 @@ mod tests {
                 "content": "# Requirements\n\nBuild a widget"
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -129,6 +136,7 @@ mod tests {
                 "content": "content"
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -148,6 +156,7 @@ mod tests {
             "feed_prd",
             &json!({"title": "T", "content": "C"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -161,6 +170,7 @@ mod tests {
             "feed_prd",
             &json!({"project_id": "p1", "content": "C"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -170,6 +180,7 @@ mod tests {
             "feed_prd",
             &json!({"project_id": "p1", "title": "T"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -195,6 +206,7 @@ mod tests {
                 "content": "This should be in the DB"
             }),
             &db,
+            None,
         )
         .unwrap();
 

@@ -100,19 +100,19 @@ pub fn tool_definitions() -> Vec<Value> {
         // Epic tools
         tool(
             "create_epic",
-            "Create a new epic within a project",
+            "Create a new epic within a project. If project_id is omitted, the default from .blueprint/setting.json is used.",
             json!({
-                "project_id": { "type": "string", "description": "Parent project ID" },
+                "project_id": { "type": "string", "description": "Parent project ID (optional if .blueprint/setting.json is configured)" },
                 "title": { "type": "string", "description": "Epic title" },
                 "description": { "type": "string", "description": "Epic description" }
             }),
-            &["project_id", "title", "description"],
+            &["title", "description"],
         ),
         tool(
             "list_epics",
-            "List epics, optionally filtered by project or status",
+            "List epics, optionally filtered by project or status. If project_id is omitted, the default from .blueprint/setting.json is used when configured.",
             json!({
-                "project_id": { "type": "string", "description": "Filter by project ID" },
+                "project_id": { "type": "string", "description": "Filter by project ID (optional, defaults to .blueprint/setting.json when configured)" },
                 "status": {
                     "type": "string",
                     "enum": ["todo", "in_progress", "done"],
@@ -223,22 +223,22 @@ pub fn tool_definitions() -> Vec<Value> {
         // Status tool
         tool(
             "get_status",
-            "Get project status overview with progress summaries",
+            "Get project status overview with progress summaries. If project_id is omitted, the default from .blueprint/setting.json is used when configured.",
             json!({
-                "project_id": { "type": "string", "description": "Filter by project ID" }
+                "project_id": { "type": "string", "description": "Filter by project ID (optional, defaults to .blueprint/setting.json when configured)" }
             }),
             &[],
         ),
         // PRD tool
         tool(
             "feed_prd",
-            "Feed a PRD document to break down into epics and tasks",
+            "Feed a PRD document to break down into epics and tasks. If project_id is omitted, the default from .blueprint/setting.json is used.",
             json!({
-                "project_id": { "type": "string", "description": "Target project ID" },
+                "project_id": { "type": "string", "description": "Target project ID (optional if .blueprint/setting.json is configured)" },
                 "title": { "type": "string", "description": "PRD title" },
                 "content": { "type": "string", "description": "PRD content as text or markdown" }
             }),
-            &["project_id", "title", "content"],
+            &["title", "content"],
         ),
     ]
 }
@@ -282,15 +282,20 @@ pub(crate) fn parse_optional_status<T: std::str::FromStr>(args: &Value) -> Resul
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub fn dispatch_tool(name: &str, args: &Value, db: &Database) -> Option<Value> {
+pub fn dispatch_tool(
+    name: &str,
+    args: &Value,
+    db: &Database,
+    default_project_id: Option<&str>,
+) -> Option<Value> {
     let result = match name {
         "create_project" => project::handle_create_project(args, db),
         "list_projects" => project::handle_list_projects(args, db),
         "get_project" => project::handle_get_project(args, db),
         "update_project" => project::handle_update_project(args, db),
         "delete_project" => project::handle_delete_project(args, db),
-        "create_epic" => epic::handle_create_epic(args, db),
-        "list_epics" => epic::handle_list_epics(args, db),
+        "create_epic" => epic::handle_create_epic(args, db, default_project_id),
+        "list_epics" => epic::handle_list_epics(args, db, default_project_id),
         "get_epic" => epic::handle_get_epic(args, db),
         "update_epic" => epic::handle_update_epic(args, db),
         "delete_epic" => epic::handle_delete_epic(args, db),
@@ -301,8 +306,8 @@ pub fn dispatch_tool(name: &str, args: &Value, db: &Database) -> Option<Value> {
         "delete_task" => task::handle_delete_task(args, db),
         "add_dependency" => dependency::handle_add_dependency(args, db),
         "remove_dependency" => dependency::handle_remove_dependency(args, db),
-        "get_status" => status::handle_get_status(args, db),
-        "feed_prd" => prd::handle_feed_prd(args, db),
+        "get_status" => status::handle_get_status(args, db, default_project_id),
+        "feed_prd" => prd::handle_feed_prd(args, db, default_project_id),
         _ => {
             let is_known = tool_definitions()
                 .iter()
@@ -359,6 +364,6 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool_returns_none() {
         let (db, _dir) = test_db();
-        assert!(dispatch_tool("nonexistent_tool", &json!({}), &db).is_none());
+        assert!(dispatch_tool("nonexistent_tool", &json!({}), &db, None).is_none());
     }
 }

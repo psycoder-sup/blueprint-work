@@ -2,6 +2,7 @@ mod cli;
 mod db;
 mod mcp;
 mod models;
+mod settings;
 mod tui;
 
 use clap::{Parser, Subcommand};

@@ -6,15 +6,21 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::db::Database;
+use crate::settings::Settings;
 use types::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, JSONRPC_VERSION};
 
 pub struct McpServer {
     db: Database,
+    default_project_id: Option<String>,
 }
 
 impl McpServer {
     pub fn new(db: Database) -> Self {
-        Self { db }
+        let settings = Settings::load();
+        Self {
+            db,
+            default_project_id: settings.project_id,
+        }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -129,7 +135,7 @@ impl McpServer {
 
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        match tools::dispatch_tool(name, &args, &self.db) {
+        match tools::dispatch_tool(name, &args, &self.db, self.default_project_id.as_deref()) {
             Some(result) => JsonRpcResponse::success(id, result),
             None => JsonRpcResponse::error(
                 id,
@@ -151,7 +157,7 @@ mod tests {
         let path = dir.path().join("test.db");
         let db = Database::open(&path).unwrap();
         db.migrate().unwrap();
-        (McpServer::new(db), dir)
+        (McpServer { db, default_project_id: None }, dir)
     }
 
     #[test]

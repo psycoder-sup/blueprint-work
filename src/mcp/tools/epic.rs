@@ -10,10 +10,16 @@ use crate::models::epic::{CreateEpicInput, ItemStatus, UpdateEpicInput};
 
 use super::{optional_str, parse_optional_status, require_str, tool_error, tool_result};
 
-pub(super) fn handle_create_epic(args: &Value, db: &Database) -> Value {
-    let project_id = match require_str(args, "project_id") {
-        Ok(v) => v,
-        Err(e) => return e,
+pub(super) fn handle_create_epic(
+    args: &Value,
+    db: &Database,
+    default_project_id: Option<&str>,
+) -> Value {
+    let project_id = match optional_str(args, "project_id")
+        .or_else(|| default_project_id.map(String::from))
+    {
+        Some(v) => v,
+        None => return tool_error("Missing required parameter: project_id"),
     };
     let title = match require_str(args, "title") {
         Ok(v) => v,
@@ -43,8 +49,13 @@ pub(super) fn handle_create_epic(args: &Value, db: &Database) -> Value {
     }
 }
 
-pub(super) fn handle_list_epics(args: &Value, db: &Database) -> Value {
-    let project_id = optional_str(args, "project_id");
+pub(super) fn handle_list_epics(
+    args: &Value,
+    db: &Database,
+    default_project_id: Option<&str>,
+) -> Value {
+    let project_id = optional_str(args, "project_id")
+        .or_else(|| default_project_id.map(String::from));
     let status = match parse_optional_status::<ItemStatus>(args) {
         Ok(s) => s,
         Err(e) => return e,
@@ -173,6 +184,7 @@ mod tests {
             "create_project",
             &json!({"name": "Test Project", "description": "for epic tests"}),
             db,
+            None,
         )
         .unwrap();
         let project = parse_response(&result);
@@ -190,6 +202,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "My Epic", "description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -209,6 +222,7 @@ mod tests {
             "create_epic",
             &json!({"title": "E", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -226,6 +240,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -242,6 +257,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": "nonexistent", "title": "E", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -256,7 +272,7 @@ mod tests {
     #[test]
     fn test_list_epics_empty() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_epics", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_epics", &json!({}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let epics = parse_response(&result);
         assert!(epics.as_array().unwrap().is_empty());
@@ -270,14 +286,16 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "E1", "description": "d"}),
             &db,
+            None,
         );
         dispatch_tool(
             "create_epic",
             &json!({"project_id": project_id, "title": "E2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_epics", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_epics", &json!({}), &db, None).unwrap();
         let epics = parse_response(&result);
         assert_eq!(epics.as_array().unwrap().len(), 2);
     }
@@ -291,14 +309,16 @@ mod tests {
             "create_epic",
             &json!({"project_id": p1, "title": "E1", "description": "d"}),
             &db,
+            None,
         );
         dispatch_tool(
             "create_epic",
             &json!({"project_id": p2, "title": "E2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_epics", &json!({"project_id": p1}), &db).unwrap();
+        let result = dispatch_tool("list_epics", &json!({"project_id": p1}), &db, None).unwrap();
         let epics = parse_response(&result);
         assert_eq!(epics.as_array().unwrap().len(), 1);
         assert_eq!(epics[0]["title"], "E1");
@@ -313,6 +333,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "E1", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let epic = parse_response(&create_result);
@@ -322,15 +343,17 @@ mod tests {
             "update_epic",
             &json!({"id": epic_id, "status": "in_progress"}),
             &db,
+            None,
         );
 
         dispatch_tool(
             "create_epic",
             &json!({"project_id": project_id, "title": "E2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_epics", &json!({"status": "in_progress"}), &db).unwrap();
+        let result = dispatch_tool("list_epics", &json!({"status": "in_progress"}), &db, None).unwrap();
         let epics = parse_response(&result);
         assert_eq!(epics.as_array().unwrap().len(), 1);
         assert_eq!(epics[0]["title"], "E1");
@@ -339,7 +362,7 @@ mod tests {
     #[test]
     fn test_list_epics_invalid_status() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_epics", &json!({"status": "bogus"}), &db).unwrap();
+        let result = dispatch_tool("list_epics", &json!({"status": "bogus"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -358,6 +381,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Get Me", "description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
         let epic = parse_response(&create_result);
@@ -374,7 +398,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = dispatch_tool("get_epic", &json!({"id": epic_id}), &db).unwrap();
+        let result = dispatch_tool("get_epic", &json!({"id": epic_id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["epic"]["title"], "Get Me");
@@ -387,7 +411,7 @@ mod tests {
     #[test]
     fn test_get_epic_not_found() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_epic", &json!({"id": "nonexistent"}), &db).unwrap();
+        let result = dispatch_tool("get_epic", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -398,7 +422,7 @@ mod tests {
     #[test]
     fn test_get_epic_missing_id() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_epic", &json!({}), &db).unwrap();
+        let result = dispatch_tool("get_epic", &json!({}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -417,6 +441,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Original", "description": "old desc"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -426,6 +451,7 @@ mod tests {
             "update_epic",
             &json!({"id": id, "title": "Renamed", "status": "done"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -443,6 +469,7 @@ mod tests {
             "update_epic",
             &json!({"id": "nonexistent", "title": "X"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -463,18 +490,19 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "To Delete", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
         let id = created["id"].as_str().unwrap();
 
-        let result = dispatch_tool("delete_epic", &json!({"id": id}), &db).unwrap();
+        let result = dispatch_tool("delete_epic", &json!({"id": id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["deleted"], true);
 
         // Verify it's gone
-        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
     }
 
@@ -482,7 +510,7 @@ mod tests {
     fn test_delete_epic_not_found() {
         let (db, _dir) = test_db();
         let result =
-            dispatch_tool("delete_epic", &json!({"id": "nonexistent"}), &db).unwrap();
+            dispatch_tool("delete_epic", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -499,6 +527,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Parent", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -516,7 +545,7 @@ mod tests {
         .unwrap();
 
         // Delete the epic
-        dispatch_tool("delete_epic", &json!({"id": epic_id}), &db).unwrap();
+        dispatch_tool("delete_epic", &json!({"id": epic_id}), &db, None).unwrap();
 
         // Verify tasks are gone
         let tasks = task_db::list_tasks(&db, Some(epic_id), None).unwrap();
@@ -535,6 +564,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Lifecycle", "description": "testing"}),
             &db,
+            None,
         )
         .unwrap();
         assert!(create_result.get("isError").is_none());
@@ -543,7 +573,7 @@ mod tests {
         assert_eq!(created["status"], "todo");
 
         // Read
-        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db, None).unwrap();
         let data = parse_response(&get_result);
         assert_eq!(data["epic"]["title"], "Lifecycle");
 
@@ -552,6 +582,7 @@ mod tests {
             "list_epics",
             &json!({"project_id": project_id}),
             &db,
+            None,
         )
         .unwrap();
         let epics = parse_response(&list_result);
@@ -562,6 +593,7 @@ mod tests {
             "update_epic",
             &json!({"id": id, "title": "Updated", "status": "done"}),
             &db,
+            None,
         )
         .unwrap();
         let updated = parse_response(&update_result);
@@ -569,12 +601,12 @@ mod tests {
         assert_eq!(updated["status"], "done");
 
         // Delete
-        let delete_result = dispatch_tool("delete_epic", &json!({"id": id}), &db).unwrap();
+        let delete_result = dispatch_tool("delete_epic", &json!({"id": id}), &db, None).unwrap();
         let deleted = parse_response(&delete_result);
         assert_eq!(deleted["deleted"], true);
 
         // Verify gone
-        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_epic", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
     }
 }

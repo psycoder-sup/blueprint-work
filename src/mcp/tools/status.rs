@@ -8,8 +8,13 @@ use crate::db::Database;
 
 use super::{optional_str, tool_error, tool_result};
 
-pub(super) fn handle_get_status(args: &Value, db: &Database) -> Value {
-    let project_id = optional_str(args, "project_id");
+pub(super) fn handle_get_status(
+    args: &Value,
+    db: &Database,
+    default_project_id: Option<&str>,
+) -> Value {
+    let project_id = optional_str(args, "project_id")
+        .or_else(|| default_project_id.map(String::from));
 
     let project_label = match &project_id {
         Some(pid) => match project_db::get_project(db, pid) {
@@ -132,7 +137,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db).unwrap();
+        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
 
         let data = parse_response(&result);
@@ -146,7 +151,7 @@ mod tests {
     fn test_status_without_project_id() {
         let (db, _dir) = test_db();
 
-        let result = dispatch_tool("get_status", &json!({}), &db).unwrap();
+        let result = dispatch_tool("get_status", &json!({}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
 
         let data = parse_response(&result);
@@ -160,7 +165,7 @@ mod tests {
         let (db, _dir) = test_db();
 
         let result =
-            dispatch_tool("get_status", &json!({"project_id": "nonexistent"}), &db).unwrap();
+            dispatch_tool("get_status", &json!({"project_id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -180,7 +185,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db).unwrap();
+        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db, None).unwrap();
         let data = parse_response(&result);
 
         assert_eq!(data["total_epics"], 0);
@@ -274,7 +279,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db).unwrap();
+        let result = dispatch_tool("get_status", &json!({"project_id": project.id}), &db, None).unwrap();
         let data = parse_response(&result);
 
         assert_eq!(data["project"], "Full");

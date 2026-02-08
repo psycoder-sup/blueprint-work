@@ -104,6 +104,7 @@ mod tests {
             "create_project",
             &json!({"name": "Test Project", "description": "for dep tests"}),
             db,
+            None,
         )
         .unwrap();
         parse_response(&result)["id"]
@@ -117,6 +118,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Test Epic", "description": "for dep tests"}),
             db,
+            None,
         )
         .unwrap();
         parse_response(&result)["id"]
@@ -130,6 +132,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Test Task", "description": "for dep tests"}),
             db,
+            None,
         )
         .unwrap();
         parse_response(&result)["id"]
@@ -154,6 +157,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": e2,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -180,6 +184,7 @@ mod tests {
                 "blocked_type": "task", "blocked_id": t2,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -203,6 +208,7 @@ mod tests {
                 "blocked_type": "task", "blocked_id": tid,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -225,6 +231,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": eid,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -247,8 +254,8 @@ mod tests {
             "blocked_type": "epic", "blocked_id": e2,
         });
 
-        dispatch_tool("add_dependency", &args, &db).unwrap();
-        let result = dispatch_tool("add_dependency", &args, &db).unwrap();
+        dispatch_tool("add_dependency", &args, &db, None).unwrap();
+        let result = dispatch_tool("add_dependency", &args, &db, None).unwrap();
 
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
@@ -268,6 +275,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": "y",
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -291,6 +299,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": eid,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -309,6 +318,7 @@ mod tests {
             "add_dependency",
             &json!({"blocker_type": "epic"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -335,6 +345,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": e2,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -345,6 +356,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": e2,
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -364,6 +376,7 @@ mod tests {
                 "blocked_type": "epic", "blocked_id": "b",
             }),
             &db,
+            None,
         )
         .unwrap();
 
@@ -391,19 +404,20 @@ mod tests {
                 "blocked_type": "task", "blocked_id": t2,
             }),
             &db,
+            None,
         )
         .unwrap();
         assert!(add_result.get("isError").is_none());
 
         // Verify via get_task: t2 should show t1 as a blocker
-        let get_result = dispatch_tool("get_task", &json!({"id": t2}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": t2}), &db, None).unwrap();
         let data = parse_response(&get_result);
         let blockers = data["blockers"].as_array().unwrap();
         assert_eq!(blockers.len(), 1);
         assert_eq!(blockers[0]["blocker_id"], t1);
 
         // Verify via get_task: t1 should show t2 in blocks
-        let get_result = dispatch_tool("get_task", &json!({"id": t1}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": t1}), &db, None).unwrap();
         let data = parse_response(&get_result);
         let blocks = data["blocks"].as_array().unwrap();
         assert_eq!(blocks.len(), 1);
@@ -417,13 +431,14 @@ mod tests {
                 "blocked_type": "task", "blocked_id": t2,
             }),
             &db,
+            None,
         )
         .unwrap();
         let removed = parse_response(&remove_result);
         assert_eq!(removed["removed"], true);
 
         // Verify dependency is gone
-        let get_result = dispatch_tool("get_task", &json!({"id": t2}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": t2}), &db, None).unwrap();
         let data = parse_response(&get_result);
         assert!(data["blockers"].as_array().unwrap().is_empty());
     }

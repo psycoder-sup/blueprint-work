@@ -166,6 +166,7 @@ mod tests {
             "create_project",
             &json!({"name": "Test Project", "description": "for task tests"}),
             db,
+            None,
         )
         .unwrap();
         let project = parse_response(&result);
@@ -177,6 +178,7 @@ mod tests {
             "create_epic",
             &json!({"project_id": project_id, "title": "Test Epic", "description": "for task tests"}),
             db,
+            None,
         )
         .unwrap();
         let epic = parse_response(&result);
@@ -195,6 +197,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "My Task", "description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -214,6 +217,7 @@ mod tests {
             "create_task",
             &json!({"title": "T", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -232,6 +236,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -248,6 +253,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": "nonexistent", "title": "T", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -262,7 +268,7 @@ mod tests {
     #[test]
     fn test_list_tasks_empty() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_tasks", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let tasks = parse_response(&result);
         assert!(tasks.as_array().unwrap().is_empty());
@@ -277,14 +283,16 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "T1", "description": "d"}),
             &db,
+            None,
         );
         dispatch_tool(
             "create_task",
             &json!({"epic_id": epic_id, "title": "T2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_tasks", &json!({}), &db).unwrap();
+        let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
         let tasks = parse_response(&result);
         assert_eq!(tasks.as_array().unwrap().len(), 2);
     }
@@ -299,14 +307,16 @@ mod tests {
             "create_task",
             &json!({"epic_id": e1, "title": "T1", "description": "d"}),
             &db,
+            None,
         );
         dispatch_tool(
             "create_task",
             &json!({"epic_id": e2, "title": "T2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_tasks", &json!({"epic_id": e1}), &db).unwrap();
+        let result = dispatch_tool("list_tasks", &json!({"epic_id": e1}), &db, None).unwrap();
         let tasks = parse_response(&result);
         assert_eq!(tasks.as_array().unwrap().len(), 1);
         assert_eq!(tasks[0]["title"], "T1");
@@ -322,6 +332,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "T1", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let task = parse_response(&create_result);
@@ -331,15 +342,17 @@ mod tests {
             "update_task",
             &json!({"id": task_id, "status": "in_progress"}),
             &db,
+            None,
         );
 
         dispatch_tool(
             "create_task",
             &json!({"epic_id": epic_id, "title": "T2", "description": "d"}),
             &db,
+            None,
         );
 
-        let result = dispatch_tool("list_tasks", &json!({"status": "in_progress"}), &db).unwrap();
+        let result = dispatch_tool("list_tasks", &json!({"status": "in_progress"}), &db, None).unwrap();
         let tasks = parse_response(&result);
         assert_eq!(tasks.as_array().unwrap().len(), 1);
         assert_eq!(tasks[0]["title"], "T1");
@@ -348,7 +361,7 @@ mod tests {
     #[test]
     fn test_list_tasks_invalid_status() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("list_tasks", &json!({"status": "bogus"}), &db).unwrap();
+        let result = dispatch_tool("list_tasks", &json!({"status": "bogus"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -368,12 +381,13 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Get Me", "description": "desc"}),
             &db,
+            None,
         )
         .unwrap();
         let task = parse_response(&create_result);
         let task_id = task["id"].as_str().unwrap();
 
-        let result = dispatch_tool("get_task", &json!({"id": task_id}), &db).unwrap();
+        let result = dispatch_tool("get_task", &json!({"id": task_id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["task"]["title"], "Get Me");
@@ -384,7 +398,7 @@ mod tests {
     #[test]
     fn test_get_task_not_found() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_task", &json!({"id": "nonexistent"}), &db).unwrap();
+        let result = dispatch_tool("get_task", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -395,7 +409,7 @@ mod tests {
     #[test]
     fn test_get_task_missing_id() {
         let (db, _dir) = test_db();
-        let result = dispatch_tool("get_task", &json!({}), &db).unwrap();
+        let result = dispatch_tool("get_task", &json!({}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -415,6 +429,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Original", "description": "old desc"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
@@ -424,6 +439,7 @@ mod tests {
             "update_task",
             &json!({"id": id, "title": "Renamed", "status": "done"}),
             &db,
+            None,
         )
         .unwrap();
 
@@ -441,6 +457,7 @@ mod tests {
             "update_task",
             &json!({"id": "nonexistent", "title": "X"}),
             &db,
+            None,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -462,18 +479,19 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "To Delete", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let created = parse_response(&create_result);
         let id = created["id"].as_str().unwrap();
 
-        let result = dispatch_tool("delete_task", &json!({"id": id}), &db).unwrap();
+        let result = dispatch_tool("delete_task", &json!({"id": id}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
         let data = parse_response(&result);
         assert_eq!(data["deleted"], true);
 
         // Verify it's gone
-        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
     }
 
@@ -481,7 +499,7 @@ mod tests {
     fn test_delete_task_not_found() {
         let (db, _dir) = test_db();
         let result =
-            dispatch_tool("delete_task", &json!({"id": "nonexistent"}), &db).unwrap();
+            dispatch_tool("delete_task", &json!({"id": "nonexistent"}), &db, None).unwrap();
         assert_eq!(result["isError"], true);
         assert!(result["content"][0]["text"]
             .as_str()
@@ -499,6 +517,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Blocker", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let t1 = parse_response(&r1);
@@ -508,6 +527,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Blocked", "description": "d"}),
             &db,
+            None,
         )
         .unwrap();
         let t2 = parse_response(&r2);
@@ -526,7 +546,7 @@ mod tests {
         .unwrap();
 
         // Delete t1 — should cascade-remove the dependency
-        dispatch_tool("delete_task", &json!({"id": t1_id}), &db).unwrap();
+        dispatch_tool("delete_task", &json!({"id": t1_id}), &db, None).unwrap();
 
         // Verify dependency is gone
         let blockers = dep_db::get_blockers(&db, &DependencyType::Task, t2_id).unwrap();
@@ -546,6 +566,7 @@ mod tests {
             "create_task",
             &json!({"epic_id": epic_id, "title": "Lifecycle", "description": "testing"}),
             &db,
+            None,
         )
         .unwrap();
         assert!(create_result.get("isError").is_none());
@@ -554,7 +575,7 @@ mod tests {
         assert_eq!(created["status"], "todo");
 
         // Read
-        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db, None).unwrap();
         let data = parse_response(&get_result);
         assert_eq!(data["task"]["title"], "Lifecycle");
 
@@ -563,6 +584,7 @@ mod tests {
             "list_tasks",
             &json!({"epic_id": epic_id}),
             &db,
+            None,
         )
         .unwrap();
         let tasks = parse_response(&list_result);
@@ -573,6 +595,7 @@ mod tests {
             "update_task",
             &json!({"id": id, "title": "Updated", "status": "done"}),
             &db,
+            None,
         )
         .unwrap();
         let updated = parse_response(&update_result);
@@ -580,12 +603,12 @@ mod tests {
         assert_eq!(updated["status"], "done");
 
         // Delete
-        let delete_result = dispatch_tool("delete_task", &json!({"id": id}), &db).unwrap();
+        let delete_result = dispatch_tool("delete_task", &json!({"id": id}), &db, None).unwrap();
         let deleted = parse_response(&delete_result);
         assert_eq!(deleted["deleted"], true);
 
         // Verify gone
-        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db).unwrap();
+        let get_result = dispatch_tool("get_task", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
     }
 }
