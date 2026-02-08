@@ -6,7 +6,7 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 
 ## Status
 
-`in-progress`
+`done`
 
 ## Dependencies
 
