@@ -1,7 +1,7 @@
 ---
 id: TK-0309
 title: "Build Graph Summary Bar"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0306]
@@ -62,6 +62,13 @@ Format: `◉ {n} epics/tasks │ ─▶ {n} edges │ ⚠ {n} blocked │ ■ {n
 
 ### Manual Tests
 - [ ] Visual inspection of summary bar
+
+## Code Quality
+
+After implementation is complete, run the following steps:
+
+1. **Run code-simplifier agent** — Simplify and refine the code for clarity, consistency, and maintainability
+2. **Run code-reviewer agent** — Review the code for bugs, security issues, and quality problems
 
 ## Notes
 TBD

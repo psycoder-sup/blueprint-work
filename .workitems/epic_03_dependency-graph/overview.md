@@ -34,8 +34,8 @@ Build the full-screen ASCII DAG (directed acyclic graph) visualization for the T
 | 05 | Implement edge routing | done |
 | 06 | Build epic-level graph view | done |
 | 07 | Build task-level graph view | done |
-| 08 | Implement graph view toggle & scroll | todo |
-| 09 | Build graph summary bar | todo |
+| 08 | Implement graph view toggle & scroll | done |
+| 09 | Build graph summary bar | done |
 
 ## Acceptance Criteria
 

@@ -1,7 +1,7 @@
 ---
 id: TK-0308
 title: "Implement Graph View Toggle & Scroll"
-status: TODO
+status: DONE
 epic: 3
 priority: medium
 dependencies: [TK-0306, TK-0307]
@@ -23,11 +23,11 @@ Implement keyboard controls for the graph view: toggling between epic/task views
 - Scroll reset on view switch
 
 ## Acceptance Criteria
-- [ ] `1`/`2` keys toggle between views
-- [ ] `Esc` returns to main TUI
-- [ ] Scrolling works in both directions
-- [ ] Scroll indicators shown when content overflows
-- [ ] Scroll resets on view switch
+- [x] `1`/`2` keys toggle between views
+- [x] `Esc` returns to main TUI
+- [x] Scrolling works in both directions
+- [x] Scroll indicators shown when content overflows
+- [x] Scroll resets on view switch
 
 ## Technical Context
 ### Relevant Spec Sections
@@ -62,6 +62,13 @@ Key bindings in graph mode: `1` switch to epic-level, `2` switch to task-level, 
 
 ### Manual Tests
 - [ ] Test scrolling and view switching
+
+## Code Quality
+
+After implementation is complete, run the following steps:
+
+1. **Run code-simplifier agent** — Simplify and refine the code for clarity, consistency, and maintainability
+2. **Run code-reviewer agent** — Review the code for bugs, security issues, and quality problems
 
 ## Notes
 TBD
