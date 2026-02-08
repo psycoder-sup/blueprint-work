@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params_from_iter, OptionalExtension, Row};
 
 use crate::db::Database;
+use crate::db::resolve::{classify_id, IdKind};
 use crate::models::{CreateEpicInput, Epic, ItemStatus, UpdateEpicInput};
 
 const SELECT_COLUMNS: &str = "e.id, e.project_id, e.title, e.description, e.status, e.short_id, e.created_at, e.updated_at";
@@ -178,6 +179,53 @@ pub fn delete_epic(db: &Database, id: &str) -> Result<bool> {
 
     tx.commit().context("failed to commit epic deletion")?;
     Ok(rows_affected > 0)
+}
+
+pub fn resolve_epic_id(
+    db: &Database,
+    id_or_short: &str,
+    default_project_id: Option<&str>,
+) -> Result<String> {
+    match classify_id(id_or_short) {
+        IdKind::Ulid => Ok(id_or_short.to_string()),
+        IdKind::EpicShortId => {
+            let short = id_or_short.to_uppercase();
+            match default_project_id {
+                Some(pid) => db
+                    .conn()
+                    .query_row(
+                        "SELECT id FROM epics WHERE short_id = ?1 AND project_id = ?2",
+                        [short.as_str(), pid],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .context("failed to resolve epic short ID")?
+                    .ok_or_else(|| anyhow::anyhow!("Epic not found: {id_or_short}")),
+                None => {
+                    let mut stmt = db
+                        .conn()
+                        .prepare("SELECT id FROM epics WHERE short_id = ?1")?;
+                    let ids: Vec<String> = stmt
+                        .query_map([short.as_str()], |row| row.get(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .context("failed to resolve epic short ID")?;
+                    match ids.len() {
+                        0 => anyhow::bail!("Epic not found: {id_or_short}"),
+                        1 => Ok(ids.into_iter().next().unwrap()),
+                        _ => anyhow::bail!(
+                            "Ambiguous short ID '{}': matches {} epics across projects. \
+                             Provide a default project or use the full ULID.",
+                            id_or_short,
+                            ids.len()
+                        ),
+                    }
+                }
+            }
+        }
+        IdKind::TaskShortId => {
+            anyhow::bail!("Expected epic ID, got task short ID: {id_or_short}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +596,114 @@ mod tests {
         assert_eq!(e1.short_id, Some("E1".to_string()));
         assert_eq!(e2.short_id, Some("E2".to_string()));
         assert_eq!(e3.short_id, Some("E3".to_string()));
+    }
+
+    // --- resolve_epic_id tests ---
+
+    #[test]
+    fn test_resolve_epic_id_ulid_passthrough() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_epic_id(&db, "01ARZ3NDEKTSV4RRFFQ69G5FAV", None).unwrap();
+        assert_eq!(result, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    }
+
+    #[test]
+    fn test_resolve_epic_id_short_with_project() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Test".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_epic_id(&db, "E1", Some(&project.id)).unwrap();
+        assert_eq!(resolved, epic.id);
+    }
+
+    #[test]
+    fn test_resolve_epic_id_short_without_project_unique() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Test".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_epic_id(&db, "E1", None).unwrap();
+        assert_eq!(resolved, epic.id);
+    }
+
+    #[test]
+    fn test_resolve_epic_id_short_without_project_ambiguous() {
+        let (db, _dir) = open_temp_db();
+        let p1 = create_test_project(&db);
+        let p2 = create_test_project(&db);
+        create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: p1.id.clone(),
+                title: "P1 Epic".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: p2.id.clone(),
+                title: "P2 Epic".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let result = resolve_epic_id(&db, "E1", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Ambiguous"));
+    }
+
+    #[test]
+    fn test_resolve_epic_id_not_found() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_epic_id(&db, "E99", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_resolve_epic_id_task_short_id_error() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_epic_id(&db, "E1-T3", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("task short ID"));
+    }
+
+    #[test]
+    fn test_resolve_epic_id_case_insensitive() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id.clone(),
+                title: "Test".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_epic_id(&db, "e1", Some(&project.id)).unwrap();
+        assert_eq!(resolved, epic.id);
     }
 
     #[test]

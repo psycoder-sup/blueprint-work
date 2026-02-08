@@ -104,6 +104,7 @@ pub mod dependency;
 pub mod epic;
 pub mod prd;
 pub mod project;
+pub(crate) mod resolve;
 pub mod status;
 pub mod task;
 

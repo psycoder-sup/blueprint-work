@@ -63,10 +63,14 @@ pub(super) fn handle_list_epics(
     }
 }
 
-pub(super) fn handle_get_epic(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_get_epic(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
+    };
+    let id = match epic_db::resolve_epic_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
     };
 
     let epic = match epic_db::get_epic(db, &id) {
@@ -105,10 +109,14 @@ pub(super) fn handle_get_epic(args: &Value, db: &Database) -> Value {
     tool_result(&json!({ "epic": epic, "tasks": tasks, "blockers": blockers, "blocks": blocks }))
 }
 
-pub(super) fn handle_update_epic(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_update_epic(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
+    };
+    let id = match epic_db::resolve_epic_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
     };
 
     let status = match parse_optional_status::<ItemStatus>(args) {
@@ -136,14 +144,23 @@ pub(super) fn handle_update_epic(args: &Value, db: &Database) -> Value {
     }
 }
 
-pub(super) fn handle_delete_epic(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_delete_epic(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
     };
+    let id = match epic_db::resolve_epic_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
+    };
+
+    let short_id = epic_db::get_epic(db, &id)
+        .ok()
+        .flatten()
+        .and_then(|e| e.short_id);
 
     match epic_db::delete_epic(db, &id) {
-        Ok(true) => tool_result(&json!({ "deleted": true, "id": id })),
+        Ok(true) => tool_result(&json!({ "deleted": true, "id": id, "short_id": short_id })),
         Ok(false) => tool_error(&format!("Epic not found: {id}")),
         Err(e) => {
             eprintln!("delete_epic error: {e:#}");
@@ -543,6 +560,117 @@ mod tests {
         // Verify tasks are gone
         let tasks = task_db::list_tasks(&db, Some(epic_id), None).unwrap();
         assert!(tasks.is_empty(), "tasks should be cascade-deleted");
+    }
+
+    // --- Short ID integration tests ---
+
+    #[test]
+    fn test_get_epic_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+
+        let create_result = dispatch_tool(
+            "create_epic",
+            &json!({"project_id": project_id, "title": "Short ID Test", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+        let created = parse_response(&create_result);
+        let ulid = created["id"].as_str().unwrap();
+
+        let result = dispatch_tool(
+            "get_epic",
+            &json!({"id": "E1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let data = parse_response(&result);
+        assert_eq!(data["epic"]["id"], ulid);
+        assert_eq!(data["epic"]["title"], "Short ID Test");
+    }
+
+    #[test]
+    fn test_update_epic_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+
+        dispatch_tool(
+            "create_epic",
+            &json!({"project_id": project_id, "title": "Original", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+
+        let result = dispatch_tool(
+            "update_epic",
+            &json!({"id": "E1", "title": "Updated via short ID"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let updated = parse_response(&result);
+        assert_eq!(updated["title"], "Updated via short ID");
+    }
+
+    #[test]
+    fn test_delete_epic_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+
+        dispatch_tool(
+            "create_epic",
+            &json!({"project_id": project_id, "title": "To Delete", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+
+        let result = dispatch_tool(
+            "delete_epic",
+            &json!({"id": "E1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let data = parse_response(&result);
+        assert_eq!(data["deleted"], true);
+    }
+
+    #[test]
+    fn test_get_epic_by_short_id_case_insensitive() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+
+        let create_result = dispatch_tool(
+            "create_epic",
+            &json!({"project_id": project_id, "title": "Case Test", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+        let created = parse_response(&create_result);
+        let ulid = created["id"].as_str().unwrap();
+
+        let result = dispatch_tool(
+            "get_epic",
+            &json!({"id": "e1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let data = parse_response(&result);
+        assert_eq!(data["epic"]["id"], ulid);
     }
 
     // --- Full CRUD lifecycle test ---

@@ -10,10 +10,14 @@ use crate::models::task::{CreateTaskInput, UpdateTaskInput};
 
 use super::{optional_str, parse_optional_status, require_str, tool_error, tool_result};
 
-pub(super) fn handle_create_task(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_create_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let epic_id = match require_str(args, "epic_id") {
         Ok(v) => v,
         Err(e) => return e,
+    };
+    let epic_id = match epic_db::resolve_epic_id(db, &epic_id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
     };
     let title = match require_str(args, "title") {
         Ok(v) => v,
@@ -43,8 +47,14 @@ pub(super) fn handle_create_task(args: &Value, db: &Database) -> Value {
     }
 }
 
-pub(super) fn handle_list_tasks(args: &Value, db: &Database) -> Value {
-    let epic_id = optional_str(args, "epic_id");
+pub(super) fn handle_list_tasks(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
+    let epic_id = match optional_str(args, "epic_id") {
+        Some(eid) => match epic_db::resolve_epic_id(db, &eid, default_project_id) {
+            Ok(v) => Some(v),
+            Err(e) => return tool_error(&e.to_string()),
+        },
+        None => None,
+    };
     let status = match parse_optional_status::<ItemStatus>(args) {
         Ok(s) => s,
         Err(e) => return e,
@@ -59,10 +69,14 @@ pub(super) fn handle_list_tasks(args: &Value, db: &Database) -> Value {
     }
 }
 
-pub(super) fn handle_get_task(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_get_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
+    };
+    let id = match task_db::resolve_task_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
     };
 
     let task = match task_db::get_task(db, &id) {
@@ -93,10 +107,14 @@ pub(super) fn handle_get_task(args: &Value, db: &Database) -> Value {
     tool_result(&json!({ "task": task, "blockers": blockers, "blocks": blocks }))
 }
 
-pub(super) fn handle_update_task(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_update_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
+    };
+    let id = match task_db::resolve_task_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
     };
 
     let status = match parse_optional_status::<ItemStatus>(args) {
@@ -124,14 +142,23 @@ pub(super) fn handle_update_task(args: &Value, db: &Database) -> Value {
     }
 }
 
-pub(super) fn handle_delete_task(args: &Value, db: &Database) -> Value {
+pub(super) fn handle_delete_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let id = match require_str(args, "id") {
         Ok(v) => v,
         Err(e) => return e,
     };
+    let id = match task_db::resolve_task_id(db, &id, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return tool_error(&e.to_string()),
+    };
+
+    let short_id = task_db::get_task(db, &id)
+        .ok()
+        .flatten()
+        .and_then(|t| t.short_id);
 
     match task_db::delete_task(db, &id) {
-        Ok(true) => tool_result(&json!({ "deleted": true, "id": id })),
+        Ok(true) => tool_result(&json!({ "deleted": true, "id": id, "short_id": short_id })),
         Ok(false) => tool_error(&format!("Task not found: {id}")),
         Err(e) => {
             eprintln!("delete_task error: {e:#}");
@@ -551,6 +578,136 @@ mod tests {
         // Verify dependency is gone
         let blockers = dep_db::get_blockers(&db, &DependencyType::Task, t2_id).unwrap();
         assert!(blockers.is_empty(), "dependency should be cascade-deleted");
+    }
+
+    // --- Short ID integration tests ---
+
+    #[test]
+    fn test_get_task_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        let epic_id = create_test_epic(&db, &project_id);
+
+        let create_result = dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "Short ID Task", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+        let created = parse_response(&create_result);
+        let ulid = created["id"].as_str().unwrap();
+
+        let result = dispatch_tool(
+            "get_task",
+            &json!({"id": "E1-T1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let data = parse_response(&result);
+        assert_eq!(data["task"]["id"], ulid);
+        assert_eq!(data["task"]["title"], "Short ID Task");
+    }
+
+    #[test]
+    fn test_create_task_with_epic_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        create_test_epic(&db, &project_id);
+
+        let result = dispatch_tool(
+            "create_task",
+            &json!({"epic_id": "E1", "title": "Via Short ID", "description": "d"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let task = parse_response(&result);
+        assert_eq!(task["title"], "Via Short ID");
+    }
+
+    #[test]
+    fn test_list_tasks_with_epic_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        let epic_id = create_test_epic(&db, &project_id);
+
+        dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "T1", "description": "d"}),
+            &db,
+            None,
+        );
+
+        let result = dispatch_tool(
+            "list_tasks",
+            &json!({"epic_id": "E1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let tasks = parse_response(&result);
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["title"], "T1");
+    }
+
+    #[test]
+    fn test_update_task_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        let epic_id = create_test_epic(&db, &project_id);
+
+        dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "Original", "description": "d"}),
+            &db,
+            None,
+        );
+
+        let result = dispatch_tool(
+            "update_task",
+            &json!({"id": "E1-T1", "title": "Updated via short ID"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let updated = parse_response(&result);
+        assert_eq!(updated["title"], "Updated via short ID");
+    }
+
+    #[test]
+    fn test_delete_task_by_short_id() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        let epic_id = create_test_epic(&db, &project_id);
+
+        dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "To Delete", "description": "d"}),
+            &db,
+            None,
+        );
+
+        let result = dispatch_tool(
+            "delete_task",
+            &json!({"id": "E1-T1"}),
+            &db,
+            Some(&project_id),
+        )
+        .unwrap();
+
+        assert!(result.get("isError").is_none());
+        let data = parse_response(&result);
+        assert_eq!(data["deleted"], true);
     }
 
     // --- Full CRUD lifecycle test ---

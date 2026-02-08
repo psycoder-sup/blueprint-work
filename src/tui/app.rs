@@ -19,7 +19,7 @@ use crate::db::status::{
 use crate::db::task::{get_task, list_tasks, update_task};
 use crate::models::{BlueTask, DependencyType, Epic, ItemStatus, Project, UpdateTaskInput};
 use crate::tui::graph::{DagLayout, Edge, Node};
-use crate::tui::graph_render::{NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK, NODE_WIDTH};
+use crate::tui::graph_render::{self, NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK, NODE_WIDTH};
 use crate::tui::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +133,9 @@ fn build_graph_cache(
     let layout = DagLayout::new(nodes, edges);
 
     let h_spacing = NODE_WIDTH + 4;
-    let v_spacing = node_height + 2;
+    // Use the max possible height (2-line title) for spacing so all nodes fit.
+    let max_height = node_height + 1; // +1 for potential 2-line title
+    let v_spacing = max_height + 2;
 
     let mut node_positions = HashMap::new();
 
@@ -635,10 +637,14 @@ impl App {
             return;
         };
 
-        let node_height = match cache.level {
-            GraphLevel::Epic => NODE_HEIGHT_EPIC,
-            GraphLevel::Task => NODE_HEIGHT_TASK,
-        };
+        let has_progress = cache.level == GraphLevel::Epic;
+        let default_height = if has_progress { NODE_HEIGHT_EPIC } else { NODE_HEIGHT_TASK };
+        let node_height = cache
+            .layout
+            .nodes
+            .get(&focused_id)
+            .map(|n| graph_render::node_height(&n.label, has_progress))
+            .unwrap_or(default_height);
 
         // Approximate viewport size: use stored terminal size minus chrome.
         // In dual-pane mode, the viewport is roughly half the terminal width.
@@ -686,7 +692,10 @@ impl App {
             .iter()
             .map(|e| Node {
                 id: e.id.clone(),
-                label: e.title.clone(),
+                label: match &e.short_id {
+                    Some(sid) => format!("[{sid}] {}", e.title),
+                    None => e.title.clone(),
+                },
                 status: e.status.clone(),
                 layer: None,
                 x_position: 0,
@@ -725,7 +734,10 @@ impl App {
             .iter()
             .map(|t| Node {
                 id: t.id.clone(),
-                label: t.title.clone(),
+                label: match &t.short_id {
+                    Some(sid) => format!("[{sid}] {}", t.title),
+                    None => t.title.clone(),
+                },
                 status: t.status.clone(),
                 layer: None,
                 x_position: 0,

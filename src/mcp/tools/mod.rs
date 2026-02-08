@@ -32,13 +32,13 @@ fn dependency_properties() -> Value {
             "enum": ["epic", "task"],
             "description": "Type of the blocking item"
         },
-        "blocker_id": { "type": "string", "description": "ID of the blocking item" },
+        "blocker_id": { "type": "string", "description": "ID of the blocking item (ULID or short ID like E1 / E1-T3)" },
         "blocked_type": {
             "type": "string",
             "enum": ["epic", "task"],
             "description": "Type of the blocked item"
         },
-        "blocked_id": { "type": "string", "description": "ID of the blocked item" }
+        "blocked_id": { "type": "string", "description": "ID of the blocked item (ULID or short ID like E1 / E1-T3)" }
     })
 }
 
@@ -125,7 +125,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "get_epic",
             "Get an epic by ID",
             json!({
-                "id": { "type": "string", "description": "Epic ID" }
+                "id": { "type": "string", "description": "Epic ID (ULID or short ID like E1)" }
             }),
             &["id"],
         ),
@@ -133,7 +133,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "update_epic",
             "Update an epic",
             json!({
-                "id": { "type": "string", "description": "Epic ID" },
+                "id": { "type": "string", "description": "Epic ID (ULID or short ID like E1)" },
                 "title": { "type": "string", "description": "New title" },
                 "description": { "type": "string", "description": "New description" },
                 "status": {
@@ -148,7 +148,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "delete_epic",
             "Delete an epic",
             json!({
-                "id": { "type": "string", "description": "Epic ID" }
+                "id": { "type": "string", "description": "Epic ID (ULID or short ID like E1)" }
             }),
             &["id"],
         ),
@@ -157,7 +157,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "create_task",
             "Create a new task within an epic",
             json!({
-                "epic_id": { "type": "string", "description": "Parent epic ID" },
+                "epic_id": { "type": "string", "description": "Parent epic ID (ULID or short ID like E1)" },
                 "title": { "type": "string", "description": "Task title" },
                 "description": { "type": "string", "description": "Task description" }
             }),
@@ -167,7 +167,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "list_tasks",
             "List tasks, optionally filtered by epic or status",
             json!({
-                "epic_id": { "type": "string", "description": "Filter by epic ID" },
+                "epic_id": { "type": "string", "description": "Filter by epic ID (ULID or short ID like E1)" },
                 "status": {
                     "type": "string",
                     "enum": ["todo", "in_progress", "done"],
@@ -180,7 +180,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "get_task",
             "Get a task by ID",
             json!({
-                "id": { "type": "string", "description": "Task ID" }
+                "id": { "type": "string", "description": "Task ID (ULID or short ID like E1-T3)" }
             }),
             &["id"],
         ),
@@ -188,7 +188,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "update_task",
             "Update a task",
             json!({
-                "id": { "type": "string", "description": "Task ID" },
+                "id": { "type": "string", "description": "Task ID (ULID or short ID like E1-T3)" },
                 "title": { "type": "string", "description": "New title" },
                 "description": { "type": "string", "description": "New description" },
                 "status": {
@@ -203,7 +203,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "delete_task",
             "Delete a task",
             json!({
-                "id": { "type": "string", "description": "Task ID" }
+                "id": { "type": "string", "description": "Task ID (ULID or short ID like E1-T3)" }
             }),
             &["id"],
         ),
@@ -332,16 +332,16 @@ pub fn dispatch_tool(
         "delete_project" => project::handle_delete_project(args, db),
         "create_epic" => epic::handle_create_epic(args, db, default_project_id),
         "list_epics" => epic::handle_list_epics(args, db, default_project_id),
-        "get_epic" => epic::handle_get_epic(args, db),
-        "update_epic" => epic::handle_update_epic(args, db),
-        "delete_epic" => epic::handle_delete_epic(args, db),
-        "create_task" => task::handle_create_task(args, db),
-        "list_tasks" => task::handle_list_tasks(args, db),
-        "get_task" => task::handle_get_task(args, db),
-        "update_task" => task::handle_update_task(args, db),
-        "delete_task" => task::handle_delete_task(args, db),
-        "add_dependency" => dependency::handle_add_dependency(args, db),
-        "remove_dependency" => dependency::handle_remove_dependency(args, db),
+        "get_epic" => epic::handle_get_epic(args, db, default_project_id),
+        "update_epic" => epic::handle_update_epic(args, db, default_project_id),
+        "delete_epic" => epic::handle_delete_epic(args, db, default_project_id),
+        "create_task" => task::handle_create_task(args, db, default_project_id),
+        "list_tasks" => task::handle_list_tasks(args, db, default_project_id),
+        "get_task" => task::handle_get_task(args, db, default_project_id),
+        "update_task" => task::handle_update_task(args, db, default_project_id),
+        "delete_task" => task::handle_delete_task(args, db, default_project_id),
+        "add_dependency" => dependency::handle_add_dependency(args, db, default_project_id),
+        "remove_dependency" => dependency::handle_remove_dependency(args, db, default_project_id),
         "get_status" => status::handle_get_status(args, db, default_project_id),
         "feed_prd" => prd::handle_feed_prd(args, db, default_project_id),
         _ => return None,

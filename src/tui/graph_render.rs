@@ -15,16 +15,25 @@ use super::theme;
 // ── Constants ────────────────────────────────────────────────────────
 
 /// Total width of a rendered node box (including border characters).
-pub const NODE_WIDTH: usize = 22;
+pub const NODE_WIDTH: usize = 30;
 
 /// Height of a task node (top border + title + bottom border).
 pub const NODE_HEIGHT_TASK: usize = 3;
 
+/// Height of a task node with a 2-line title.
+pub const NODE_HEIGHT_TASK_2LINE: usize = 4;
+
 /// Height of an epic node (top border + title + progress + bottom border).
 pub const NODE_HEIGHT_EPIC: usize = 4;
 
+/// Height of an epic node with a 2-line title.
+pub const NODE_HEIGHT_EPIC_2LINE: usize = 5;
+
 /// Interior width available for content (NODE_WIDTH minus the two border columns).
 const INNER_WIDTH: usize = NODE_WIDTH - 2;
+
+/// Maximum characters available for title text per line (inner width minus symbol and spacing).
+const TITLE_BUDGET: usize = INNER_WIDTH - 3; // 1 leading space + 1 symbol + 1 space
 
 // ── Cell ─────────────────────────────────────────────────────────────
 
@@ -267,14 +276,22 @@ fn render_marching_border(canvas: &mut Canvas, x: usize, y: usize, node_height: 
 /// `animation_frame` is the global animation counter (0–5) used for the
 /// marching border on in-progress nodes and the pulsing color effect
 /// on blocked nodes.
+/// Compute the height of a node based on whether it has a progress bar and
+/// whether its title needs two lines.
+pub fn node_height(title: &str, has_progress: bool) -> usize {
+    let needs_two_lines = title.chars().count() > TITLE_BUDGET;
+    match (has_progress, needs_two_lines) {
+        (true, true) => NODE_HEIGHT_EPIC_2LINE,
+        (true, false) => NODE_HEIGHT_EPIC,
+        (false, true) => NODE_HEIGHT_TASK_2LINE,
+        (false, false) => NODE_HEIGHT_TASK,
+    }
+}
+
 pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8) {
     let is_marching = node_box.status == ItemStatus::InProgress && !node_box.blocked;
 
-    let node_height = if node_box.progress.is_some() {
-        NODE_HEIGHT_EPIC
-    } else {
-        NODE_HEIGHT_TASK
-    };
+    let node_height = node_height(&node_box.title, node_box.progress.is_some());
 
     if is_marching {
         // Positionally-aware marching border
@@ -318,20 +335,25 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
         border_style(&node_box.status, animation_frame, node_box.blocked)
     };
 
-    // Title line
+    // Title line(s)
     let title_y = y + 1;
 
     let symbol = theme::status_symbol(&node_box.status);
     let sym_style = theme::status_style(&node_box.status);
 
     let symbol_display_width: usize = 1;
-    let title_budget = INNER_WIDTH
-        .saturating_sub(1)
-        .saturating_sub(symbol_display_width)
-        .saturating_sub(1);
 
-    let truncated_title = truncate_with_ellipsis(&node_box.title, title_budget);
+    let title_chars: Vec<char> = node_box.title.chars().collect();
+    let needs_two_lines = title_chars.len() > TITLE_BUDGET;
 
+    let (line1, line2) = if needs_two_lines {
+        let (l1, l2) = split_title_two_lines(&node_box.title, TITLE_BUDGET);
+        (l1, Some(l2))
+    } else {
+        (node_box.title.clone(), None)
+    };
+
+    // --- Line 1: symbol + first part of title ---
     // Leading space
     canvas.put_char(x + 1, title_y, ' ', content_style);
 
@@ -342,20 +364,35 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     // Space after symbol
     canvas.put_char(symbol_x + symbol_display_width, title_y, ' ', content_style);
 
-    // Title text
+    // Title text (line 1)
     let title_x = symbol_x + symbol_display_width + 1;
     let title_style = Style::default().fg(theme::TEXT_BRIGHT);
-    canvas.put_str(title_x, title_y, &truncated_title, title_style);
+    canvas.put_str(title_x, title_y, &line1, title_style);
 
-    // Fill remaining inner space
-    let used = 1 + symbol_display_width + 1 + truncated_title.chars().count();
+    // Fill remaining inner space on line 1
+    let used = 1 + symbol_display_width + 1 + line1.chars().count();
     for i in used..INNER_WIDTH {
         canvas.put_char(x + 1 + i, title_y, ' ', content_style);
     }
 
+    // --- Line 2: continuation of title (indented to align with title text) ---
+    if let Some(ref l2) = line2 {
+        let title_y2 = title_y + 1;
+        // Indent to align with title_x
+        let prefix_len = 1 + symbol_display_width + 1; // leading space + symbol + space
+        for i in 0..prefix_len {
+            canvas.put_char(x + 1 + i, title_y2, ' ', content_style);
+        }
+        canvas.put_str(title_x, title_y2, l2, title_style);
+        let used2 = prefix_len + l2.chars().count();
+        for i in used2..INNER_WIDTH {
+            canvas.put_char(x + 1 + i, title_y2, ' ', content_style);
+        }
+    }
+
     // Progress line (epic nodes only)
     if let Some((done, total)) = node_box.progress {
-        let progress_y = y + 2;
+        let progress_y = if line2.is_some() { y + 3 } else { y + 2 };
 
         let bar_width = INNER_WIDTH.saturating_sub(4);
         let bar = theme::progress_bar(done, total, bar_width);
@@ -390,7 +427,8 @@ pub fn render_edges(
     layout: &DagLayout,
     node_positions: &HashMap<String, (usize, usize)>,
     blocked_ids: &HashSet<String>,
-    node_height: usize,
+    node_heights: &HashMap<String, usize>,
+    default_height: usize,
 ) {
     for edge in &layout.edges {
         let Some(&(from_x, from_y)) = node_positions.get(&edge.from) else {
@@ -407,8 +445,9 @@ pub fn render_edges(
         };
 
         // Source: bottom-center of `from` node.
+        let from_height = node_heights.get(&edge.from).copied().unwrap_or(default_height);
         let src_x = from_x + NODE_WIDTH / 2;
-        let src_y = from_y + node_height; // one row below bottom border
+        let src_y = from_y + from_height; // one row below bottom border
 
         // Target: top-center of `to` node, one row above.
         let dst_x = to_x + NODE_WIDTH / 2;
@@ -516,6 +555,28 @@ fn put_edge_char(canvas: &mut Canvas, x: usize, y: usize, ch: char, style: Style
     canvas.put_char(x, y, ch, style);
 }
 
+/// Split a title into two lines for display in a graph node.
+///
+/// The first line gets up to `budget` characters, breaking at the last word
+/// boundary that fits. The second line gets the remainder, truncated with
+/// ellipsis if it also exceeds `budget`.
+fn split_title_two_lines(title: &str, budget: usize) -> (String, String) {
+    // Find the last space within the budget to break at a word boundary.
+    let chars: Vec<char> = title.chars().collect();
+
+    let break_pos = chars[..budget]
+        .iter()
+        .rposition(|&c| c == ' ')
+        .unwrap_or(budget);
+
+    let line1: String = chars[..break_pos].iter().collect();
+    let rest: String = chars[break_pos..].iter().collect();
+    let line2_raw = rest.trim_start();
+    let line2 = truncate_with_ellipsis(line2_raw, budget);
+
+    (line1, line2)
+}
+
 /// Truncate `s` to at most `max_chars` characters, appending an ellipsis if needed.
 fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
@@ -602,7 +663,7 @@ mod tests {
 
     #[test]
     fn render_todo_node_borders() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Setup".to_string(),
             status: ItemStatus::Todo,
@@ -624,7 +685,7 @@ mod tests {
 
     #[test]
     fn render_todo_node_contains_symbol() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Setup".to_string(),
             status: ItemStatus::Todo,
@@ -641,7 +702,7 @@ mod tests {
 
     #[test]
     fn render_todo_node_has_dim_border_color() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Setup".to_string(),
             status: ItemStatus::Todo,
@@ -660,7 +721,7 @@ mod tests {
 
     #[test]
     fn render_done_node_borders_and_color() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Init".to_string(),
             status: ItemStatus::Done,
@@ -684,7 +745,7 @@ mod tests {
 
     #[test]
     fn render_in_progress_node_uses_rounded_borders() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Work".to_string(),
             status: ItemStatus::InProgress,
@@ -712,8 +773,8 @@ mod tests {
     // ── Title truncation in node ────────────────────────────────
 
     #[test]
-    fn render_node_truncates_long_title() {
-        let mut canvas = Canvas::new(30, 5);
+    fn render_node_wraps_long_title_to_two_lines() {
+        let mut canvas = Canvas::new(40, 6);
         let node = NodeBox {
             title: "This Is A Very Long Title That Should Be Truncated".to_string(),
             status: ItemStatus::Todo,
@@ -724,20 +785,34 @@ mod tests {
         };
         render_node(&mut canvas, &node, 0);
 
+        // With TITLE_BUDGET=25, the title wraps at word boundary to 2 lines.
+        // Line 1: "This Is A Very Long" (19 chars, breaks before "Title")
         let row1 = canvas_row(&canvas, 1);
         assert!(
-            row1.contains('\u{2026}'),
-            "Long title should contain ellipsis: {row1}"
+            row1.contains("This Is A Very Long"),
+            "First line should contain start of title: {row1}"
         );
 
-        assert_eq!(row1.chars().count(), 30, "Row should be full canvas width");
+        // Line 2: continuation, truncated with ellipsis
+        let row2 = canvas_row(&canvas, 2);
+        assert!(
+            row2.contains('\u{2026}'),
+            "Second line should contain ellipsis: {row2}"
+        );
+
+        // Node should be 4 rows tall (2-line task)
+        let row3 = canvas_row(&canvas, 3);
+        assert!(
+            row3.starts_with('\u{255A}'),
+            "Bottom border at row 3 for 2-line task: {row3}"
+        );
     }
 
     // ── Progress bar in epic node ───────────────────────────────
 
     #[test]
     fn render_epic_node_has_progress_bar() {
-        let mut canvas = Canvas::new(30, 6);
+        let mut canvas = Canvas::new(40, 6);
         let node = NodeBox {
             title: "Epic 1".to_string(),
             status: ItemStatus::InProgress,
@@ -765,7 +840,7 @@ mod tests {
 
     #[test]
     fn render_epic_node_full_progress() {
-        let mut canvas = Canvas::new(30, 6);
+        let mut canvas = Canvas::new(40, 6);
         let node = NodeBox {
             title: "Done Epic".to_string(),
             status: ItemStatus::Done,
@@ -785,7 +860,7 @@ mod tests {
 
     #[test]
     fn two_nodes_at_different_positions() {
-        let mut canvas = Canvas::new(60, 10);
+        let mut canvas = Canvas::new(70, 10);
 
         let node_a = NodeBox {
             title: "Alpha".to_string(),
@@ -799,7 +874,7 @@ mod tests {
             title: "Beta".to_string(),
             status: ItemStatus::Todo,
             progress: None,
-            x: 30,
+            x: 34,
             y: 5,
             blocked: false,
         };
@@ -811,11 +886,11 @@ mod tests {
         let row1_a = canvas_row(&canvas, 1);
         assert!(row1_a.contains('\u{25C9}'));
 
-        assert_eq!(canvas.get(30, 5).ch, '\u{2554}');
+        assert_eq!(canvas.get(34, 5).ch, '\u{2554}');
         let row6 = canvas_row(&canvas, 6);
         assert!(row6.contains('\u{25A0}'));
 
-        assert_eq!(canvas.get(30, 0).ch, ' ');
+        assert_eq!(canvas.get(34, 0).ch, ' ');
         assert_eq!(canvas.get(0, 5).ch, ' ');
     }
 
@@ -903,7 +978,7 @@ mod tests {
 
     #[test]
     fn blocked_node_uses_double_line_borders() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Blocked".to_string(),
             status: ItemStatus::InProgress,
@@ -926,7 +1001,7 @@ mod tests {
     #[test]
     fn blocked_node_border_color_pulses() {
         // Bright phase (frame 0)
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Blocked".to_string(),
             status: ItemStatus::Todo,
@@ -939,7 +1014,7 @@ mod tests {
         assert_eq!(canvas.get(0, 0).style.fg, Some(theme::NEON_ORANGE));
 
         // Dim phase (frame 12)
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         render_node(&mut canvas, &node, 12);
         assert_eq!(canvas.get(0, 0).style.fg, Some(theme::DARK_ORANGE));
     }
@@ -1006,7 +1081,7 @@ mod tests {
 
     #[test]
     fn render_in_progress_task_has_marching_border() {
-        let mut canvas = Canvas::new(30, 5);
+        let mut canvas = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Work".to_string(),
             status: ItemStatus::InProgress,
@@ -1033,8 +1108,8 @@ mod tests {
     #[test]
     fn marching_border_shifts_between_frames() {
         // At frame 0, position 3 should be dim; at frame 3 it should shift to bright
-        let mut canvas0 = Canvas::new(30, 5);
-        let mut canvas3 = Canvas::new(30, 5);
+        let mut canvas0 = Canvas::new(40, 5);
+        let mut canvas3 = Canvas::new(40, 5);
         let node = NodeBox {
             title: "Work".to_string(),
             status: ItemStatus::InProgress,
@@ -1054,7 +1129,7 @@ mod tests {
 
     #[test]
     fn marching_border_epic_has_correct_height() {
-        let mut canvas = Canvas::new(30, 6);
+        let mut canvas = Canvas::new(40, 6);
         let node = NodeBox {
             title: "Epic".to_string(),
             status: ItemStatus::InProgress,
@@ -1101,70 +1176,68 @@ mod tests {
             vec![make_edge("A", "B")],
         );
 
-        let mut canvas = Canvas::new(30, 10);
+        let mut canvas = Canvas::new(40, 10);
         let mut positions = HashMap::new();
         positions.insert("A".to_string(), (0_usize, 0_usize));
         positions.insert("B".to_string(), (0_usize, 5_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
-        // src_x = 0 + 22/2 = 11, src_y = 0 + 3 = 3, dst_y = 5 - 1 = 4
-        // Vertical │ at (11, 3), ▼ at (11, 4)
-        assert_eq!(canvas.get(11, 3).ch, '\u{2502}'); // │
-        assert_eq!(canvas.get(11, 4).ch, '\u{25BC}'); // ▼
+        // src_x = 0 + 30/2 = 15, src_y = 0 + 3 = 3, dst_y = 5 - 1 = 4
+        // Vertical │ at (15, 3), ▼ at (15, 4)
+        assert_eq!(canvas.get(15, 3).ch, '\u{2502}'); // │
+        assert_eq!(canvas.get(15, 4).ch, '\u{25BC}'); // ▼
         // Color should be cyan (not blocked)
-        assert_eq!(canvas.get(11, 3).style.fg, Some(theme::NEON_CYAN));
+        assert_eq!(canvas.get(15, 3).style.fg, Some(theme::NEON_CYAN));
     }
 
     #[test]
     fn l_shaped_edge_routing_right() {
-        // A at (0, 0), B at (24, 6) — different x-columns.
+        // A at (0, 0), B at (34, 6) — different x-columns.
         let layout = DagLayout::new(
             vec![make_node("A"), make_node("B")],
             vec![make_edge("A", "B")],
         );
 
-        let mut canvas = Canvas::new(60, 12);
+        let mut canvas = Canvas::new(70, 12);
         let mut positions = HashMap::new();
         positions.insert("A".to_string(), (0_usize, 0_usize));
-        positions.insert("B".to_string(), (24_usize, 6_usize));
+        positions.insert("B".to_string(), (34_usize, 6_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
-        // src_x = 11, src_y = 3, dst_x = 35, dst_y = 5
-        // (11, 3) = │, (11, 4) = ╰, horizontal ─ from 12..35, (35, 4) = ╮, (35, 5) = ▼
-        assert_eq!(canvas.get(11, 3).ch, '\u{2502}'); // │ down from source
-        assert_eq!(canvas.get(11, 4).ch, '\u{2570}'); // ╰ corner going right
-        assert_eq!(canvas.get(12, 4).ch, '\u{2500}'); // ─ horizontal
-        assert_eq!(canvas.get(35, 4).ch, '\u{256E}'); // ╮ corner going down
-        assert_eq!(canvas.get(35, 5).ch, '\u{25BC}'); // ▼ arrow at target
+        // src_x = 0+15 = 15, src_y = 3, dst_x = 34+15 = 49, dst_y = 5
+        assert_eq!(canvas.get(15, 3).ch, '\u{2502}'); // │ down from source
+        assert_eq!(canvas.get(15, 4).ch, '\u{2570}'); // ╰ corner going right
+        assert_eq!(canvas.get(16, 4).ch, '\u{2500}'); // ─ horizontal
+        assert_eq!(canvas.get(49, 4).ch, '\u{256E}'); // ╮ corner going down
+        assert_eq!(canvas.get(49, 5).ch, '\u{25BC}'); // ▼ arrow at target
     }
 
     #[test]
     fn l_shaped_edge_routing_left() {
-        // A at (24, 0), B at (0, 6) — target to the left.
+        // A at (34, 0), B at (0, 6) — target to the left.
         let layout = DagLayout::new(
             vec![make_node("A"), make_node("B")],
             vec![make_edge("A", "B")],
         );
 
-        let mut canvas = Canvas::new(60, 12);
+        let mut canvas = Canvas::new(70, 12);
         let mut positions = HashMap::new();
-        positions.insert("A".to_string(), (24_usize, 0_usize));
+        positions.insert("A".to_string(), (34_usize, 0_usize));
         positions.insert("B".to_string(), (0_usize, 6_usize));
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
-        // src_x = 35, src_y = 3, dst_x = 11, dst_y = 5
-        // (35, 3) = │, (35, 4) = ╯, horizontal ─ from 12..35, (11, 4) = ╭, (11, 5) = ▼
-        assert_eq!(canvas.get(35, 3).ch, '\u{2502}'); // │ down from source
-        assert_eq!(canvas.get(35, 4).ch, '\u{256F}'); // ╯ corner going left
-        assert_eq!(canvas.get(34, 4).ch, '\u{2500}'); // ─ horizontal
-        assert_eq!(canvas.get(11, 4).ch, '\u{256D}'); // ╭ corner going down
-        assert_eq!(canvas.get(11, 5).ch, '\u{25BC}'); // ▼ arrow at target
+        // src_x = 34+15 = 49, src_y = 3, dst_x = 0+15 = 15, dst_y = 5
+        assert_eq!(canvas.get(49, 3).ch, '\u{2502}'); // │ down from source
+        assert_eq!(canvas.get(49, 4).ch, '\u{256F}'); // ╯ corner going left
+        assert_eq!(canvas.get(48, 4).ch, '\u{2500}'); // ─ horizontal
+        assert_eq!(canvas.get(15, 4).ch, '\u{256D}'); // ╭ corner going down
+        assert_eq!(canvas.get(15, 5).ch, '\u{25BC}'); // ▼ arrow at target
     }
 
     #[test]
@@ -1174,23 +1247,23 @@ mod tests {
             vec![make_edge("A", "B"), make_edge("A", "C")],
         );
 
-        let mut canvas = Canvas::new(60, 12);
+        let mut canvas = Canvas::new(70, 12);
         let mut positions = HashMap::new();
         positions.insert("A".to_string(), (0_usize, 0_usize));
         positions.insert("B".to_string(), (0_usize, 5_usize));
-        positions.insert("C".to_string(), (24_usize, 5_usize));
+        positions.insert("C".to_string(), (34_usize, 5_usize));
 
         let mut blocked = HashSet::new();
         blocked.insert("C".to_string());
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
         // Edge A->B (not blocked) should be cyan.
-        assert_eq!(canvas.get(11, 3).style.fg, Some(theme::NEON_CYAN));
+        assert_eq!(canvas.get(15, 3).style.fg, Some(theme::NEON_CYAN));
 
         // Edge A->C (blocked target) should be pink.
-        // The arrow at C's position: dst_x = 35, dst_y = 4
-        assert_eq!(canvas.get(35, 4).style.fg, Some(theme::NEON_PINK));
+        // The arrow at C's position: dst_x = 34+15 = 49, dst_y = 4
+        assert_eq!(canvas.get(49, 4).style.fg, Some(theme::NEON_PINK));
     }
 
     #[test]
@@ -1200,19 +1273,19 @@ mod tests {
             vec![make_edge("A", "B")],
         );
 
-        let mut canvas = Canvas::new(30, 10);
+        let mut canvas = Canvas::new(40, 10);
         let mut positions = HashMap::new();
         positions.insert("A".to_string(), (0_usize, 0_usize));
         positions.insert("B".to_string(), (0_usize, 5_usize));
         let blocked = HashSet::new();
 
         // Place a node character on the canvas first.
-        canvas.put_char(11, 3, 'X', Style::default());
+        canvas.put_char(15, 3, 'X', Style::default());
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
         // The 'X' should NOT be overwritten by the edge character.
-        assert_eq!(canvas.get(11, 3).ch, 'X');
+        assert_eq!(canvas.get(15, 3).ch, 'X');
     }
 
     #[test]
@@ -1222,11 +1295,11 @@ mod tests {
             vec![], // no edges
         );
 
-        let mut canvas = Canvas::new(30, 10);
+        let mut canvas = Canvas::new(40, 10);
         let positions = HashMap::new();
         let blocked = HashSet::new();
 
-        render_edges(&mut canvas, &layout, &positions, &blocked, NODE_HEIGHT_TASK);
+        render_edges(&mut canvas, &layout, &positions, &blocked, &HashMap::new(), NODE_HEIGHT_TASK);
 
         // Canvas should remain all spaces.
         for y in 0..canvas.height {
@@ -1241,7 +1314,7 @@ mod tests {
     #[test]
     fn focus_highlight_outer_glow_preserves_inner_border() {
         // Canvas needs extra room: node at (2,2) with outer glow at (1,1)
-        let mut canvas = Canvas::new(30, 8);
+        let mut canvas = Canvas::new(40, 8);
         let node = NodeBox {
             title: "Node".to_string(),
             status: ItemStatus::Todo,
@@ -1284,8 +1357,8 @@ mod tests {
 
     #[test]
     fn focus_highlight_epic_height() {
-        // Node at (2,2), outer glow needs room: canvas 30 wide, 8 tall
-        let mut canvas = Canvas::new(30, 8);
+        // Node at (2,2), outer glow needs room: canvas 40 wide, 8 tall
+        let mut canvas = Canvas::new(40, 8);
         render_focus_highlight(&mut canvas, 2, 2, NODE_HEIGHT_EPIC);
 
         // Bottom outer glow at y + NODE_HEIGHT_EPIC = 2 + 4 = 6

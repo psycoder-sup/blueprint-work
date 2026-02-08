@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params_from_iter, OptionalExtension, Row};
 
 use crate::db::Database;
+use crate::db::resolve::{classify_id, IdKind};
 use crate::models::{BlueTask, CreateTaskInput, ItemStatus, UpdateTaskInput};
 
 const SELECT_COLUMNS: &str = "id, epic_id, title, description, status, short_id, created_at, updated_at";
@@ -168,6 +169,35 @@ pub fn delete_task(db: &Database, id: &str) -> Result<bool> {
 
     tx.commit().context("failed to commit task deletion")?;
     Ok(rows_affected > 0)
+}
+
+pub fn resolve_task_id(
+    db: &Database,
+    id_or_short: &str,
+    default_project_id: Option<&str>,
+) -> Result<String> {
+    match classify_id(id_or_short) {
+        IdKind::Ulid => Ok(id_or_short.to_string()),
+        IdKind::TaskShortId => {
+            let upper = id_or_short.to_uppercase();
+            let dash_pos = upper.find("-T").expect("classify_id guaranteed -T present");
+            let epic_short = &upper[..dash_pos];
+            let epic_id =
+                super::epic::resolve_epic_id(db, epic_short, default_project_id)?;
+            db.conn()
+                .query_row(
+                    "SELECT id FROM tasks WHERE short_id = ?1 AND epic_id = ?2",
+                    [upper.as_str(), epic_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .context("failed to resolve task short ID")?
+                .ok_or_else(|| anyhow::anyhow!("Task not found: {id_or_short}"))
+        }
+        IdKind::EpicShortId => {
+            anyhow::bail!("Expected task ID, got epic short ID: {id_or_short}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -539,6 +569,80 @@ mod tests {
         assert_eq!(t1.short_id, Some("E1-T1".to_string()));
         assert_eq!(t2.short_id, Some("E1-T2".to_string()));
         assert_eq!(t3.short_id, Some("E1-T3".to_string()));
+    }
+
+    // --- resolve_task_id tests ---
+
+    #[test]
+    fn test_resolve_task_id_ulid_passthrough() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_task_id(&db, "01ARZ3NDEKTSV4RRFFQ69G5FAV", None).unwrap();
+        assert_eq!(result, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    }
+
+    #[test]
+    fn test_resolve_task_id_short_two_step() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_test_epic(&db, &project.id);
+        let task = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Test Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_task_id(&db, "E1-T1", Some(&project.id)).unwrap();
+        assert_eq!(resolved, task.id);
+    }
+
+    #[test]
+    fn test_resolve_task_id_epic_not_found() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_task_id(&db, "E99-T1", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_resolve_task_id_task_not_found() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        create_test_epic(&db, &project.id);
+
+        let result = resolve_task_id(&db, "E1-T99", Some(&project.id));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_resolve_task_id_epic_short_id_error() {
+        let (db, _dir) = open_temp_db();
+        let result = resolve_task_id(&db, "E1", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("epic short ID"));
+    }
+
+    #[test]
+    fn test_resolve_task_id_case_insensitive() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_test_epic(&db, &project.id);
+        let task = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Test Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_task_id(&db, "e1-t1", Some(&project.id)).unwrap();
+        assert_eq!(resolved, task.id);
     }
 
     #[test]

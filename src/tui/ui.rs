@@ -9,8 +9,8 @@ use ratatui::Frame;
 use crate::models::ItemStatus;
 use crate::tui::app::{App, FocusedPanel, GraphCache, GraphLevel, GraphPane, InputMode};
 use crate::tui::graph_render::{
-    Canvas, NodeBox, render_edges, render_focus_highlight, render_node, NODE_HEIGHT_EPIC,
-    NODE_HEIGHT_TASK,
+    Canvas, NodeBox, node_height, render_edges, render_focus_highlight, render_node,
+    NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
 };
 use crate::tui::theme;
 
@@ -724,13 +724,23 @@ fn draw_graph_canvas_with_cache(
             return;
         }
 
-        let (blocked_ids, node_height) = match cache.level {
+        let (blocked_ids, default_height) = match cache.level {
             GraphLevel::Epic => (&app.blocked_epic_ids, NODE_HEIGHT_EPIC),
             GraphLevel::Task => (&app.blocked_task_ids, NODE_HEIGHT_TASK),
         };
 
+        // Compute per-node heights based on title length and whether it has a progress bar.
+        let mut per_node_heights: HashMap<String, usize> = HashMap::new();
+        for (node_id, _) in &cache.node_positions {
+            if let Some(node) = cache.layout.nodes.get(node_id) {
+                let has_progress = cache.level == GraphLevel::Epic;
+                let h = node_height(&node.label, has_progress);
+                per_node_heights.insert(node_id.clone(), h);
+            }
+        }
+
         // Compute the full canvas extent from node positions.
-        let (full_width, full_height) = graph_canvas_extent(cache, node_height);
+        let (full_width, full_height) = graph_canvas_extent(cache, &per_node_heights, default_height);
 
         // Use the larger of the full extent or the viewport so nodes always render.
         let canvas_w = full_width.max(viewport_width);
@@ -768,14 +778,16 @@ fn draw_graph_canvas_with_cache(
             &cache.layout,
             &cache.node_positions,
             blocked_ids,
-            node_height,
+            &per_node_heights,
+            default_height,
         );
 
         // Render focus highlight on the selected node
         if let Some(fid) = focused_node_id
             && let Some(&(fx, fy)) = cache.node_positions.get(fid)
         {
-            render_focus_highlight(&mut canvas, fx, fy, node_height);
+            let fh = per_node_heights.get(fid).copied().unwrap_or(default_height);
+            render_focus_highlight(&mut canvas, fx, fy, fh);
         }
 
         // Clamp scroll offsets to valid bounds.
@@ -816,15 +828,20 @@ fn draw_graph_canvas_with_cache(
 }
 
 /// Compute the minimum canvas size needed to contain all nodes (with padding).
-fn graph_canvas_extent(cache: &GraphCache, node_height: usize) -> (usize, usize) {
+fn graph_canvas_extent(
+    cache: &GraphCache,
+    per_node_heights: &HashMap<String, usize>,
+    default_height: usize,
+) -> (usize, usize) {
     use crate::tui::graph_render::NODE_WIDTH;
 
     let mut max_x: usize = 0;
     let mut max_y: usize = 0;
 
-    for &(x, y) in cache.node_positions.values() {
+    for (node_id, &(x, y)) in &cache.node_positions {
+        let h = per_node_heights.get(node_id).copied().unwrap_or(default_height);
         max_x = max_x.max(x + NODE_WIDTH);
-        max_y = max_y.max(y + node_height);
+        max_y = max_y.max(y + h);
     }
 
     // Add small padding for edge routing below the lowest nodes.
