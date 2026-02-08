@@ -477,30 +477,32 @@ pub fn render_focus_highlight(canvas: &mut Canvas, x: usize, y: usize, node_heig
         .add_modifier(ratatui::style::Modifier::BOLD);
 
     let outer_w = NODE_WIDTH + 2;
-    // Use wrapping_sub to get usize coordinates; put_char clips out-of-bounds.
+    // Use wrapping_sub to get usize coordinates; when x or y is 0, ox/oy wrap
+    // to usize::MAX. We use saturating_add for all subsequent arithmetic so
+    // the result stays at usize::MAX and put_char clips it out-of-bounds.
     let ox = x.wrapping_sub(1);
     let oy = y.wrapping_sub(1);
 
     // Top border: ╭───╮ at oy
     canvas.put_char(ox, oy, '\u{256D}', style); // ╭
     for i in 1..outer_w - 1 {
-        canvas.put_char(ox + i, oy, '\u{2500}', style); // ─
+        canvas.put_char(ox.saturating_add(i), oy, '\u{2500}', style); // ─
     }
-    canvas.put_char(ox + outer_w - 1, oy, '\u{256E}', style); // ╮
+    canvas.put_char(ox.saturating_add(outer_w - 1), oy, '\u{256E}', style); // ╮
 
     // Side borders: │ at ox and ox+outer_w-1 for each row of the node
     for row in 0..node_height {
         canvas.put_char(ox, y + row, '\u{2502}', style); // │
-        canvas.put_char(ox + outer_w - 1, y + row, '\u{2502}', style); // │
+        canvas.put_char(ox.saturating_add(outer_w - 1), y + row, '\u{2502}', style); // │
     }
 
     // Bottom border: ╰───╯ at y+node_height
     let bottom_oy = y + node_height;
     canvas.put_char(ox, bottom_oy, '\u{2570}', style); // ╰
     for i in 1..outer_w - 1 {
-        canvas.put_char(ox + i, bottom_oy, '\u{2500}', style); // ─
+        canvas.put_char(ox.saturating_add(i), bottom_oy, '\u{2500}', style); // ─
     }
-    canvas.put_char(ox + outer_w - 1, bottom_oy, '\u{256F}', style); // ╯
+    canvas.put_char(ox.saturating_add(outer_w - 1), bottom_oy, '\u{256F}', style); // ╯
 }
 
 /// Place an edge character on the canvas, but only if the cell is currently a space.
