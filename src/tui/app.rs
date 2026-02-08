@@ -1512,9 +1512,11 @@ mod tests {
 
         let app = App::new(db).unwrap();
 
-        // Epic counts: 1 todo, 1 in_progress, 0 done
-        assert_eq!(app.epic_status_counts["todo"], 1);
-        assert_eq!(app.epic_status_counts["in_progress"], 1);
+        // Epic counts: 0 todo, 2 in_progress, 0 done
+        // (epic1 auto-synced to in_progress because it has mixed task statuses,
+        //  epic2 was manually set to in_progress)
+        assert_eq!(app.epic_status_counts["todo"], 0);
+        assert_eq!(app.epic_status_counts["in_progress"], 2);
         assert_eq!(app.epic_status_counts["done"], 0);
 
         // Task counts: 1 todo, 1 in_progress, 1 done

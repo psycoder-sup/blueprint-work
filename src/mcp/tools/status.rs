@@ -283,7 +283,7 @@ mod tests {
 
         assert_eq!(data["project"], "Full");
         assert_eq!(data["total_epics"], 1);
-        assert_eq!(data["epics_by_status"]["todo"], 1);
+        assert_eq!(data["epics_by_status"]["in_progress"], 1);
         assert_eq!(data["total_tasks"], 3);
         assert_eq!(data["tasks_by_status"]["todo"], 2);
         assert_eq!(data["tasks_by_status"]["in_progress"], 1);

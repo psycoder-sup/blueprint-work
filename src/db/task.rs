@@ -65,6 +65,8 @@ pub fn create_task(db: &Database, input: CreateTaskInput) -> Result<BlueTask> {
 
     tx.commit().context("failed to commit task creation")?;
 
+    super::epic::sync_epic_status(db, &input.epic_id)?;
+
     get_task(db, &id)?.context("task not found after insert")
 }
 
@@ -111,6 +113,8 @@ pub fn list_tasks(
 }
 
 pub fn update_task(db: &Database, id: &str, input: UpdateTaskInput) -> Result<BlueTask> {
+    let status_changed = input.status.is_some();
+
     let mut set_clauses: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -147,10 +151,27 @@ pub fn update_task(db: &Database, id: &str, input: UpdateTaskInput) -> Result<Bl
         anyhow::bail!("task not found: {id}");
     }
 
-    get_task(db, id)?.context("task not found after update")
+    let task = get_task(db, id)?.context("task not found after update")?;
+
+    if status_changed {
+        super::epic::sync_epic_status(db, &task.epic_id)?;
+    }
+
+    Ok(task)
 }
 
 pub fn delete_task(db: &Database, id: &str) -> Result<bool> {
+    // Fetch epic_id before deletion so we can sync the epic afterwards
+    let epic_id: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT epic_id FROM tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to fetch task epic_id before deletion")?;
+
     let tx = db
         .conn()
         .unchecked_transaction()
@@ -168,7 +189,13 @@ pub fn delete_task(db: &Database, id: &str) -> Result<bool> {
         .context("failed to delete task")?;
 
     tx.commit().context("failed to commit task deletion")?;
-    Ok(rows_affected > 0)
+
+    let deleted = rows_affected > 0;
+    if let (true, Some(eid)) = (deleted, epic_id) {
+        super::epic::sync_epic_status(db, &eid)?;
+    }
+
+    Ok(deleted)
 }
 
 pub fn resolve_task_id(
@@ -203,7 +230,7 @@ pub fn resolve_task_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::epic::create_epic;
+    use crate::db::epic::{create_epic, get_epic};
     use crate::db::project::create_project;
     use crate::models::{CreateEpicInput, CreateProjectInput, Epic, Project};
     use tempfile::TempDir;
@@ -643,6 +670,123 @@ mod tests {
 
         let resolved = resolve_task_id(&db, "e1-t1", Some(&project.id)).unwrap();
         assert_eq!(resolved, task.id);
+    }
+
+    // --- sync_epic_status integration tests ---
+
+    /// Create a project, epic, and two tasks for epic-sync integration tests.
+    fn sync_fixture_with_two_tasks() -> (Database, TempDir, Epic, BlueTask, BlueTask) {
+        let (db, dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_test_epic(&db, &project.id);
+        let t1 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task 1".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        let t2 = create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "Task 2".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        (db, dir, epic, t1, t2)
+    }
+
+    #[test]
+    fn test_update_task_syncs_epic_status() {
+        let (db, _dir, epic, t1, t2) = sync_fixture_with_two_tasks();
+
+        // Mark first task done -> epic should be in_progress
+        update_task(
+            &db,
+            &t1.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::InProgress);
+
+        // Mark second task done -> epic should be done
+        update_task(
+            &db,
+            &t2.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::Done);
+    }
+
+    #[test]
+    fn test_delete_task_syncs_epic_status() {
+        let (db, _dir, epic, t1, t2) = sync_fixture_with_two_tasks();
+
+        // Mark t1 done, t2 stays todo -> epic in_progress
+        update_task(
+            &db,
+            &t1.id,
+            UpdateTaskInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::InProgress);
+
+        // Delete the non-done task -> only done tasks remain -> epic done
+        delete_task(&db, &t2.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::Done);
+    }
+
+    #[test]
+    fn test_create_task_syncs_epic_status() {
+        use crate::db::epic::update_epic;
+        use crate::models::UpdateEpicInput;
+
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_test_epic(&db, &project.id);
+
+        // Manually set epic to done
+        update_epic(
+            &db,
+            &epic.id,
+            UpdateEpicInput {
+                status: Some(ItemStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Creating a new (todo) task should revert a done epic
+        create_task(
+            &db,
+            CreateTaskInput {
+                epic_id: epic.id.clone(),
+                title: "New Task".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::Todo);
     }
 
     #[test]

@@ -181,6 +181,53 @@ pub fn delete_epic(db: &Database, id: &str) -> Result<bool> {
     Ok(rows_affected > 0)
 }
 
+/// Derive and apply the epic's status based on its tasks' statuses.
+///
+/// Rules:
+/// - All tasks done -> epic done
+/// - Any task in_progress OR any task done (but not all) -> epic in_progress
+/// - All tasks todo -> epic todo
+/// - No tasks (0 tasks) -> no change
+pub fn sync_epic_status(db: &Database, epic_id: &str) -> Result<()> {
+    let (current_status, total, done_count, in_progress_count): (String, i64, i64, i64) = db
+        .conn()
+        .query_row(
+            "SELECT e.status, \
+                    COUNT(t.id), \
+                    COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0), \
+                    COALESCE(SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END), 0) \
+             FROM epics e LEFT JOIN tasks t ON t.epic_id = e.id \
+             WHERE e.id = ?1 \
+             GROUP BY e.id",
+            [epic_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .context("failed to query epic and task counts for sync")?;
+
+    if total == 0 {
+        return Ok(());
+    }
+
+    let new_status = if done_count == total {
+        ItemStatus::Done
+    } else if in_progress_count > 0 || done_count > 0 {
+        ItemStatus::InProgress
+    } else {
+        ItemStatus::Todo
+    };
+
+    if current_status != new_status.as_str() {
+        db.conn()
+            .execute(
+                "UPDATE epics SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+                [new_status.as_str(), epic_id],
+            )
+            .context("failed to update epic status")?;
+    }
+
+    Ok(())
+}
+
 pub fn resolve_epic_id(
     db: &Database,
     id_or_short: &str,
@@ -704,6 +751,112 @@ mod tests {
 
         let resolved = resolve_epic_id(&db, "e1", Some(&project.id)).unwrap();
         assert_eq!(resolved, epic.id);
+    }
+
+    // --- sync_epic_status tests ---
+
+    /// Create a project + epic pair for sync tests, returning (db, _dir, epic).
+    /// Uses raw SQL task inserts to avoid triggering sync_epic_status during setup.
+    fn sync_test_fixture() -> (Database, TempDir, Epic) {
+        let (db, dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_epic(
+            &db,
+            CreateEpicInput {
+                project_id: project.id,
+                title: "Sync Test".to_string(),
+                description: String::new(),
+            },
+        )
+        .unwrap();
+        (db, dir, epic)
+    }
+
+    /// Insert a task row directly (bypassing create_task to avoid triggering sync).
+    fn insert_raw_task(db: &Database, id: &str, epic_id: &str, status: &str) {
+        db.conn()
+            .execute(
+                "INSERT INTO tasks (id, epic_id, title, status) VALUES (?1, ?2, ?3, ?4)",
+                [id, epic_id, id, status],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_sync_epic_all_done() {
+        let (db, _dir, epic) = sync_test_fixture();
+        for i in 0..3 {
+            insert_raw_task(&db, &format!("t{i}"), &epic.id, "done");
+        }
+
+        sync_epic_status(&db, &epic.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::Done);
+    }
+
+    #[test]
+    fn test_sync_epic_any_in_progress() {
+        let (db, _dir, epic) = sync_test_fixture();
+        insert_raw_task(&db, "t0", &epic.id, "in_progress");
+        insert_raw_task(&db, "t1", &epic.id, "todo");
+
+        sync_epic_status(&db, &epic.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::InProgress);
+    }
+
+    #[test]
+    fn test_sync_epic_mixed_done_todo() {
+        let (db, _dir, epic) = sync_test_fixture();
+        insert_raw_task(&db, "t0", &epic.id, "done");
+        insert_raw_task(&db, "t1", &epic.id, "todo");
+
+        sync_epic_status(&db, &epic.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::InProgress);
+    }
+
+    #[test]
+    fn test_sync_epic_all_todo() {
+        let (db, _dir, epic) = sync_test_fixture();
+
+        // Set epic to in_progress first to verify it reverts
+        update_epic(
+            &db,
+            &epic.id,
+            UpdateEpicInput {
+                status: Some(ItemStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        insert_raw_task(&db, "t0", &epic.id, "todo");
+        insert_raw_task(&db, "t1", &epic.id, "todo");
+
+        sync_epic_status(&db, &epic.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::Todo);
+    }
+
+    #[test]
+    fn test_sync_epic_no_tasks() {
+        let (db, _dir, epic) = sync_test_fixture();
+
+        // Set to in_progress and verify sync doesn't change it
+        update_epic(
+            &db,
+            &epic.id,
+            UpdateEpicInput {
+                status: Some(ItemStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        sync_epic_status(&db, &epic.id).unwrap();
+        let e = get_epic(&db, &epic.id).unwrap().unwrap();
+        assert_eq!(e.status, ItemStatus::InProgress, "no tasks should leave epic unchanged");
     }
 
     #[test]
