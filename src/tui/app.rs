@@ -210,12 +210,11 @@ impl App {
 
             terminal.draw(|frame| ui::draw(frame, self))?;
 
-            if event::poll(Duration::from_millis(42))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        self.handle_key(key);
-                    }
-                }
+            if event::poll(Duration::from_millis(42))?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+            {
+                self.handle_key(key);
             }
 
             // Advance animation frame every tick (~42ms ≈ 24 fps).
@@ -554,13 +553,7 @@ impl App {
 
         let new_id = match current_focus.as_deref() {
             Some(current_id) => {
-                let (row, col) = match Self::find_in_grid(&grid, current_id) {
-                    Some(pos) => pos,
-                    None => {
-                        // Node not found in grid (stale focus), reset to first
-                        (0, 0)
-                    }
-                };
+                let (row, col) = Self::find_in_grid(&grid, current_id).unwrap_or_default();
                 match direction {
                     GraphDirection::Up => {
                         let new_row = row.saturating_sub(1);

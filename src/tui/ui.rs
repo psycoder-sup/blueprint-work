@@ -696,6 +696,7 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Core graph canvas rendering, parameterized for reuse in both single and dual-pane modes.
+#[allow(clippy::too_many_arguments)]
 fn draw_graph_canvas_with_cache(
     frame: &mut Frame,
     app: &App,
@@ -771,10 +772,10 @@ fn draw_graph_canvas_with_cache(
         );
 
         // Render focus highlight on the selected node
-        if let Some(fid) = focused_node_id {
-            if let Some(&(fx, fy)) = cache.node_positions.get(fid) {
-                render_focus_highlight(&mut canvas, fx, fy, node_height);
-            }
+        if let Some(fid) = focused_node_id
+            && let Some(&(fx, fy)) = cache.node_positions.get(fid)
+        {
+            render_focus_highlight(&mut canvas, fx, fy, node_height);
         }
 
         // Clamp scroll offsets to valid bounds.

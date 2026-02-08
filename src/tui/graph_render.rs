@@ -122,7 +122,7 @@ pub struct NodeBox {
 /// and dim orange using the global `animation_frame` counter.
 pub fn border_style(status: &ItemStatus, animation_frame: u8, blocked: bool) -> Style {
     if blocked {
-        let bright = (animation_frame / 12) % 2 == 0;
+        let bright = (animation_frame / 12).is_multiple_of(2);
         let color = if bright {
             theme::NEON_ORANGE
         } else {
