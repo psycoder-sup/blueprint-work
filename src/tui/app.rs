@@ -138,14 +138,14 @@ fn build_graph_cache(
 
     for (layer_idx, layer) in layout.layers.iter().enumerate() {
         for (x_idx, node_id) in layer.iter().enumerate() {
-            node_positions.insert(node_id.clone(), (x_idx * h_spacing, layer_idx * v_spacing));
+            node_positions.insert(node_id.clone(), (1 + x_idx * h_spacing, 1 + layer_idx * v_spacing));
         }
     }
 
     if !layout.orphans.is_empty() {
         let orphan_y = layout.layers.len() * v_spacing;
         for (x_idx, node_id) in layout.orphans.iter().enumerate() {
-            node_positions.insert(node_id.clone(), (x_idx * h_spacing, orphan_y));
+            node_positions.insert(node_id.clone(), (1 + x_idx * h_spacing, 1 + orphan_y));
         }
     }
 
@@ -269,10 +269,24 @@ impl App {
         self.refresh_tasks();
         self.refresh_status_and_deps();
 
-        // Invalidate graph caches so they get rebuilt on next draw
-        self.graph_cache = None;
-        self.epic_graph_cache = None;
-        self.task_graph_cache = None;
+        // Rebuild graph caches in-place if currently viewing the graph,
+        // preserving scroll positions and focused node state.
+        // Otherwise just invalidate so they get rebuilt on next entry.
+        if self.mode == InputMode::GraphView {
+            if self.dual_pane {
+                self.build_epic_graph();
+                self.epic_graph_cache = self.graph_cache.take();
+                self.build_task_graph();
+                self.task_graph_cache = self.graph_cache.take();
+            } else {
+                match self.graph_mode {
+                    GraphLevel::Epic => self.build_epic_graph(),
+                    GraphLevel::Task => self.build_task_graph(),
+                }
+            }
+        } else {
+            self.invalidate_graph_caches();
+        }
     }
 
     fn refresh_status_and_deps(&mut self) {
@@ -730,6 +744,13 @@ impl App {
         );
 
         self.graph_cache = Some(build_graph_cache(nodes, edges, NODE_HEIGHT_TASK, GraphLevel::Task));
+    }
+
+    /// Clear all graph caches so they are rebuilt on next entry.
+    fn invalidate_graph_caches(&mut self) {
+        self.graph_cache = None;
+        self.epic_graph_cache = None;
+        self.task_graph_cache = None;
     }
 
     /// Collect outgoing dependency edges for the given item IDs and type.
@@ -1757,13 +1778,26 @@ mod tests {
     }
 
     #[test]
-    fn graph_cache_invalidated_on_data_refresh() {
+    fn graph_cache_rebuilt_on_data_refresh_in_graph_view() {
         let (mut app, _dir) = app_with_epics(2);
 
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         assert!(app.graph_cache.is_some());
 
-        // Simulating a data refresh should invalidate the cache
+        // Refresh while in GraphView should rebuild, not clear
+        app.refresh_data();
+        assert!(app.graph_cache.is_some());
+    }
+
+    #[test]
+    fn graph_cache_invalidated_on_data_refresh_outside_graph_view() {
+        let (mut app, _dir) = app_with_epics(2);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(app.graph_cache.is_some());
+
+        // Leave graph view, then refresh — cache should be cleared
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
         app.refresh_data();
         assert!(app.graph_cache.is_none());
     }
@@ -2115,12 +2149,28 @@ mod tests {
     }
 
     #[test]
-    fn dual_caches_invalidated_on_refresh() {
+    fn dual_caches_rebuilt_on_refresh_in_graph_view() {
         let (mut app, _dir) = app_with_tasks(2);
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         app.handle_key(KeyEvent::from(KeyCode::Char('3')));
         assert!(app.epic_graph_cache.is_some());
 
+        // Refresh while in dual-pane GraphView should rebuild, not clear
+        app.refresh_data();
+        assert!(app.epic_graph_cache.is_some());
+        assert!(app.task_graph_cache.is_some());
+    }
+
+    #[test]
+    fn dual_caches_invalidated_on_refresh_outside_graph_view() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert!(app.epic_graph_cache.is_some());
+
+        // Leave graph view, then refresh — caches should be cleared
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
         app.refresh_data();
         assert!(app.epic_graph_cache.is_none());
         assert!(app.task_graph_cache.is_none());
