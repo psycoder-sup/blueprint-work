@@ -122,7 +122,7 @@ pub struct NodeBox {
 /// and dim orange using the global `animation_frame` counter.
 pub fn border_style(status: &ItemStatus, animation_frame: u8, blocked: bool) -> Style {
     if blocked {
-        let bright = (animation_frame / 2) % 2 == 0;
+        let bright = (animation_frame / 12) % 2 == 0;
         let color = if bright {
             theme::NEON_ORANGE
         } else {
@@ -182,30 +182,146 @@ fn border_chars(status: &ItemStatus, animation_frame: u8, blocked: bool) -> Bord
     }
 }
 
+// ── Marching border ─────────────────────────────────────────────────
+
+/// Compute the character and style for a single marching-border cell at
+/// the given `perimeter_index`.  The pattern has period 6: 3 bright cells
+/// (solid line, NEON_CYAN) followed by 3 dim cells (dashed line, BORDER_DIM).
+///
+/// `is_horizontal` selects the line character orientation.
+fn marching_cell(perimeter_index: usize, animation_frame: u8, is_horizontal: bool) -> (char, Style) {
+    let phase = (perimeter_index + animation_frame as usize) % 6;
+    if phase < 3 {
+        // Bright segment: solid line
+        let ch = if is_horizontal { '\u{2500}' } else { '\u{2502}' }; // ─ │
+        (ch, Style::default().fg(theme::NEON_CYAN))
+    } else {
+        // Dim segment: dashed line
+        let ch = if is_horizontal { '\u{254C}' } else { '\u{254E}' }; // ╌ ╎
+        (ch, Style::default().fg(theme::BORDER_DIM))
+    }
+}
+
+/// Render the marching-ants border for an InProgress, non-blocked node.
+///
+/// Walks the perimeter clockwise assigning each cell a sequential index:
+///   top-left corner (0) → top edge → top-right corner → right edge →
+///   bottom-right corner → bottom edge (reversed) → bottom-left corner →
+///   left edge (reversed).
+fn render_marching_border(canvas: &mut Canvas, x: usize, y: usize, node_height: usize, animation_frame: u8) {
+    let mut p: usize = 0;
+
+    // --- Top-left corner (index 0) ---
+    let (_, corner_style) = marching_cell(p, animation_frame, true);
+    canvas.put_char(x, y, '\u{256D}', corner_style); // ╭
+    p += 1;
+
+    // --- Top edge (indices 1 .. NODE_WIDTH-2) ---
+    for i in 1..NODE_WIDTH - 1 {
+        let (ch, st) = marching_cell(p, animation_frame, true);
+        canvas.put_char(x + i, y, ch, st);
+        p += 1;
+    }
+
+    // --- Top-right corner ---
+    let (_, corner_style) = marching_cell(p, animation_frame, true);
+    canvas.put_char(x + NODE_WIDTH - 1, y, '\u{256E}', corner_style); // ╮
+    p += 1;
+
+    // --- Right edge (top+1 .. bottom-1) ---
+    for row in 1..node_height - 1 {
+        let (ch, st) = marching_cell(p, animation_frame, false);
+        canvas.put_char(x + NODE_WIDTH - 1, y + row, ch, st);
+        p += 1;
+    }
+
+    // --- Bottom-right corner ---
+    let (_, corner_style) = marching_cell(p, animation_frame, true);
+    canvas.put_char(x + NODE_WIDTH - 1, y + node_height - 1, '\u{256F}', corner_style); // ╯
+    p += 1;
+
+    // --- Bottom edge (reversed: right-to-left, indices along the bottom) ---
+    for i in (1..NODE_WIDTH - 1).rev() {
+        let (ch, st) = marching_cell(p, animation_frame, true);
+        canvas.put_char(x + i, y + node_height - 1, ch, st);
+        p += 1;
+    }
+
+    // --- Bottom-left corner ---
+    let (_, corner_style) = marching_cell(p, animation_frame, true);
+    canvas.put_char(x, y + node_height - 1, '\u{2570}', corner_style); // ╰
+    p += 1;
+
+    // --- Left edge (reversed: bottom-1 .. top+1) ---
+    for row in (1..node_height - 1).rev() {
+        let (ch, st) = marching_cell(p, animation_frame, false);
+        canvas.put_char(x, y + row, ch, st);
+        // p += 1; // not needed for last segment but keep for clarity
+        p += 1;
+    }
+    let _ = p; // suppress unused warning
+}
+
 // ── Rendering ────────────────────────────────────────────────────────
 
 /// Render a node box onto the canvas at the position specified in `node_box`.
 ///
-/// `animation_frame` is the global animation counter (0–3) used for the
-/// marching dotted border on in-progress nodes and the pulsing color effect
+/// `animation_frame` is the global animation counter (0–5) used for the
+/// marching border on in-progress nodes and the pulsing color effect
 /// on blocked nodes.
 pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8) {
-    let bstyle = border_style(&node_box.status, animation_frame, node_box.blocked);
-    let bc = border_chars(&node_box.status, animation_frame, node_box.blocked);
+    let is_marching = node_box.status == ItemStatus::InProgress && !node_box.blocked;
+
+    let node_height = if node_box.progress.is_some() {
+        NODE_HEIGHT_EPIC
+    } else {
+        NODE_HEIGHT_TASK
+    };
+
+    if is_marching {
+        // Positionally-aware marching border
+        render_marching_border(canvas, node_box.x, node_box.y, node_height, animation_frame);
+    } else {
+        // Uniform border for Todo / Done / blocked
+        let bstyle = border_style(&node_box.status, animation_frame, node_box.blocked);
+        let bc = border_chars(&node_box.status, animation_frame, node_box.blocked);
+        let x = node_box.x;
+        let y = node_box.y;
+
+        // Top border
+        canvas.put_char(x, y, bc.tl, bstyle);
+        for i in 1..NODE_WIDTH - 1 {
+            canvas.put_char(x + i, y, bc.h, bstyle);
+        }
+        canvas.put_char(x + NODE_WIDTH - 1, y, bc.tr, bstyle);
+
+        // Side borders for inner rows
+        let bottom_y = y + node_height - 1;
+        for row in 1..node_height - 1 {
+            canvas.put_char(x, y + row, bc.v, bstyle);
+            canvas.put_char(x + NODE_WIDTH - 1, y + row, bc.v, bstyle);
+        }
+
+        // Bottom border
+        canvas.put_char(x, bottom_y, bc.bl, bstyle);
+        for i in 1..NODE_WIDTH - 1 {
+            canvas.put_char(x + i, bottom_y, bc.h, bstyle);
+        }
+        canvas.put_char(x + NODE_WIDTH - 1, bottom_y, bc.br, bstyle);
+    }
+
+    // ── Content (shared by both paths) ──
+
     let x = node_box.x;
     let y = node_box.y;
-
-    // Top border
-    canvas.put_char(x, y, bc.tl, bstyle);
-    for i in 1..NODE_WIDTH - 1 {
-        canvas.put_char(x + i, y, bc.h, bstyle);
-    }
-    canvas.put_char(x + NODE_WIDTH - 1, y, bc.tr, bstyle);
+    let content_style = if is_marching {
+        Style::default().fg(theme::NEON_CYAN)
+    } else {
+        border_style(&node_box.status, animation_frame, node_box.blocked)
+    };
 
     // Title line
     let title_y = y + 1;
-    canvas.put_char(x, title_y, bc.v, bstyle);
-    canvas.put_char(x + NODE_WIDTH - 1, title_y, bc.v, bstyle);
 
     let symbol = theme::status_symbol(&node_box.status);
     let sym_style = theme::status_style(&node_box.status);
@@ -219,14 +335,14 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     let truncated_title = truncate_with_ellipsis(&node_box.title, title_budget);
 
     // Leading space
-    canvas.put_char(x + 1, title_y, ' ', bstyle);
+    canvas.put_char(x + 1, title_y, ' ', content_style);
 
     // Status symbol
     let symbol_x = x + 2;
     canvas.put_str(symbol_x, title_y, symbol, sym_style);
 
     // Space after symbol
-    canvas.put_char(symbol_x + symbol_display_width, title_y, ' ', bstyle);
+    canvas.put_char(symbol_x + symbol_display_width, title_y, ' ', content_style);
 
     // Title text
     let title_x = symbol_x + symbol_display_width + 1;
@@ -236,40 +352,27 @@ pub fn render_node(canvas: &mut Canvas, node_box: &NodeBox, animation_frame: u8)
     // Fill remaining inner space
     let used = 1 + symbol_display_width + 1 + truncated_title.chars().count();
     for i in used..INNER_WIDTH {
-        canvas.put_char(x + 1 + i, title_y, ' ', bstyle);
+        canvas.put_char(x + 1 + i, title_y, ' ', content_style);
     }
 
     // Progress line (epic nodes only)
-    let mut bottom_y = y + 2;
-
     if let Some((done, total)) = node_box.progress {
         let progress_y = y + 2;
-        canvas.put_char(x, progress_y, bc.v, bstyle);
-        canvas.put_char(x + NODE_WIDTH - 1, progress_y, bc.v, bstyle);
 
         let bar_width = INNER_WIDTH.saturating_sub(4);
         let bar = theme::progress_bar(done, total, bar_width);
 
-        canvas.put_char(x + 1, progress_y, ' ', bstyle);
-        canvas.put_char(x + 2, progress_y, '[', bstyle);
+        canvas.put_char(x + 1, progress_y, ' ', content_style);
+        canvas.put_char(x + 2, progress_y, '[', content_style);
         let bar_style = Style::default().fg(theme::NEON_GREEN);
         canvas.put_str(x + 3, progress_y, &bar, bar_style);
-        canvas.put_char(x + 3 + bar_width, progress_y, ']', bstyle);
+        canvas.put_char(x + 3 + bar_width, progress_y, ']', content_style);
 
         let used_progress = 1 + 1 + bar_width + 1;
         for i in (1 + used_progress)..INNER_WIDTH {
-            canvas.put_char(x + 1 + i, progress_y, ' ', bstyle);
+            canvas.put_char(x + 1 + i, progress_y, ' ', content_style);
         }
-
-        bottom_y = y + 3;
     }
-
-    // Bottom border
-    canvas.put_char(x, bottom_y, bc.bl, bstyle);
-    for i in 1..NODE_WIDTH - 1 {
-        canvas.put_char(x + i, bottom_y, bc.h, bstyle);
-    }
-    canvas.put_char(x + NODE_WIDTH - 1, bottom_y, bc.br, bstyle);
 }
 
 // ── Edge rendering ──────────────────────────────────────────────────
@@ -718,37 +821,39 @@ mod tests {
     // ── Blocked node pulsing border ─────────────────────────────
 
     #[test]
-    fn blocked_border_style_bright_on_even_phase() {
-        // (frame / 2) % 2 == 0 → bright (NEON_ORANGE)
+    fn blocked_border_style_bright_on_first_half() {
+        // (frame / 12) % 2 == 0 → bright (NEON_ORANGE)
         let style = border_style(&ItemStatus::Todo, 0, true);
         assert_eq!(style.fg, Some(theme::NEON_ORANGE));
 
-        let style = border_style(&ItemStatus::Todo, 1, true);
+        let style = border_style(&ItemStatus::Todo, 11, true);
         assert_eq!(style.fg, Some(theme::NEON_ORANGE));
     }
 
     #[test]
-    fn blocked_border_style_dim_on_odd_phase() {
-        // (frame / 2) % 2 == 1 → dim (DARK_ORANGE)
-        let style = border_style(&ItemStatus::Todo, 2, true);
+    fn blocked_border_style_dim_on_second_half() {
+        // (frame / 12) % 2 == 1 → dim (DARK_ORANGE)
+        let style = border_style(&ItemStatus::Todo, 12, true);
         assert_eq!(style.fg, Some(theme::DARK_ORANGE));
 
-        let style = border_style(&ItemStatus::Todo, 3, true);
+        let style = border_style(&ItemStatus::Todo, 23, true);
         assert_eq!(style.fg, Some(theme::DARK_ORANGE));
     }
 
     #[test]
     fn blocked_border_style_cycles_correctly() {
-        // Full cycle: frames 0-1 bright, 2-3 dim, 4-5 bright, ...
+        // Full cycle: frames 0-11 bright, 12-23 dim, 24-35 bright, 36-47 dim
         let bright = theme::NEON_ORANGE;
         let dim = theme::DARK_ORANGE;
 
         assert_eq!(border_style(&ItemStatus::Todo, 0, true).fg, Some(bright));
-        assert_eq!(border_style(&ItemStatus::Todo, 1, true).fg, Some(bright));
-        assert_eq!(border_style(&ItemStatus::Todo, 2, true).fg, Some(dim));
-        assert_eq!(border_style(&ItemStatus::Todo, 3, true).fg, Some(dim));
-        assert_eq!(border_style(&ItemStatus::Todo, 4, true).fg, Some(bright));
-        assert_eq!(border_style(&ItemStatus::Todo, 5, true).fg, Some(bright));
+        assert_eq!(border_style(&ItemStatus::Todo, 11, true).fg, Some(bright));
+        assert_eq!(border_style(&ItemStatus::Todo, 12, true).fg, Some(dim));
+        assert_eq!(border_style(&ItemStatus::Todo, 23, true).fg, Some(dim));
+        assert_eq!(border_style(&ItemStatus::Todo, 24, true).fg, Some(bright));
+        assert_eq!(border_style(&ItemStatus::Todo, 35, true).fg, Some(bright));
+        assert_eq!(border_style(&ItemStatus::Todo, 36, true).fg, Some(dim));
+        assert_eq!(border_style(&ItemStatus::Todo, 47, true).fg, Some(dim));
     }
 
     #[test]
@@ -797,53 +902,17 @@ mod tests {
         render_node(&mut canvas, &node, 0);
         assert_eq!(canvas.get(0, 0).style.fg, Some(theme::NEON_ORANGE));
 
-        // Dim phase (frame 2)
+        // Dim phase (frame 12)
         let mut canvas = Canvas::new(30, 5);
-        render_node(&mut canvas, &node, 2);
+        render_node(&mut canvas, &node, 12);
         assert_eq!(canvas.get(0, 0).style.fg, Some(theme::DARK_ORANGE));
     }
 
-    // ── Marching border animation (TK-0303) ─────────────────────
-
-    #[test]
-    fn border_chars_in_progress_frame_0_uses_first_dash_set() {
-        let bc = border_chars(&ItemStatus::InProgress, 0, false);
-        assert_eq!(bc.h, '\u{254C}', "frame 0 horizontal should be ╌");
-        assert_eq!(bc.v, '\u{254E}', "frame 0 vertical should be ╎");
-        assert_eq!(bc.tl, '\u{256D}', "corners stay rounded");
-    }
-
-    #[test]
-    fn border_chars_in_progress_frame_1_uses_second_dash_set() {
-        let bc = border_chars(&ItemStatus::InProgress, 1, false);
-        assert_eq!(bc.h, '\u{2504}', "frame 1 horizontal should be ┄");
-        assert_eq!(bc.v, '\u{2506}', "frame 1 vertical should be ┆");
-    }
-
-    #[test]
-    fn border_chars_in_progress_frame_2_matches_frame_0() {
-        let bc = border_chars(&ItemStatus::InProgress, 2, false);
-        assert_eq!(bc.h, '\u{254C}', "frame 2 horizontal should be ╌ (same as frame 0)");
-        assert_eq!(bc.v, '\u{254E}', "frame 2 vertical should be ╎ (same as frame 0)");
-    }
-
-    #[test]
-    fn border_chars_in_progress_frame_3_matches_frame_1() {
-        let bc = border_chars(&ItemStatus::InProgress, 3, false);
-        assert_eq!(bc.h, '\u{2504}', "frame 3 horizontal should be ┄ (same as frame 1)");
-        assert_eq!(bc.v, '\u{2506}', "frame 3 vertical should be ┆ (same as frame 1)");
-    }
-
-    #[test]
-    fn border_chars_wraps_at_frame_4() {
-        let bc = border_chars(&ItemStatus::InProgress, 4, false);
-        assert_eq!(bc.h, '\u{254C}', "frame 4 wraps to same as frame 0");
-        assert_eq!(bc.v, '\u{254E}');
-    }
+    // ── Marching border animation ─────────────────────────────────
 
     #[test]
     fn border_chars_todo_unchanged_by_animation_frame() {
-        for frame in 0..4 {
+        for frame in 0..6 {
             let bc = border_chars(&ItemStatus::Todo, frame, false);
             assert_eq!(bc.h, '\u{2550}', "TODO horizontal unchanged at frame {frame}");
             assert_eq!(bc.v, '\u{2551}', "TODO vertical unchanged at frame {frame}");
@@ -852,7 +921,7 @@ mod tests {
 
     #[test]
     fn border_chars_done_unchanged_by_animation_frame() {
-        for frame in 0..4 {
+        for frame in 0..6 {
             let bc = border_chars(&ItemStatus::Done, frame, false);
             assert_eq!(bc.h, '\u{2550}', "DONE horizontal unchanged at frame {frame}");
             assert_eq!(bc.v, '\u{2551}', "DONE vertical unchanged at frame {frame}");
@@ -860,7 +929,47 @@ mod tests {
     }
 
     #[test]
-    fn render_in_progress_node_uses_dashed_horizontal_at_frame_0() {
+    fn marching_cell_bright_when_phase_below_3() {
+        // perimeter_index=0, frame=0 → phase = (0 + 0) % 6 = 0 → bright
+        let (ch, st) = marching_cell(0, 0, true);
+        assert_eq!(ch, '\u{2500}', "bright horizontal = solid ─");
+        assert_eq!(st.fg, Some(theme::NEON_CYAN));
+    }
+
+    #[test]
+    fn marching_cell_dim_when_phase_ge_3() {
+        // perimeter_index=3, frame=0 → phase = (3 + 0) % 6 = 3 → dim
+        let (ch, st) = marching_cell(3, 0, true);
+        assert_eq!(ch, '\u{254C}', "dim horizontal = dashed ╌");
+        assert_eq!(st.fg, Some(theme::BORDER_DIM));
+    }
+
+    #[test]
+    fn marching_cell_vertical_chars() {
+        let (ch, _) = marching_cell(0, 0, false);
+        assert_eq!(ch, '\u{2502}', "bright vertical = solid │");
+
+        let (ch, _) = marching_cell(3, 0, false);
+        assert_eq!(ch, '\u{254E}', "dim vertical = dashed ╎");
+    }
+
+    #[test]
+    fn marching_cell_phase_shifts_with_frame() {
+        // perimeter_index=0, frame=0 → phase (0 + 0) % 6 = 0 (bright)
+        let (_, st) = marching_cell(0, 0, true);
+        assert_eq!(st.fg, Some(theme::NEON_CYAN));
+
+        // perimeter_index=0, frame=6 → phase (0 + 6) % 6 = 0 (bright, wraps)
+        let (_, st) = marching_cell(0, 6, true);
+        assert_eq!(st.fg, Some(theme::NEON_CYAN));
+
+        // perimeter_index=0, frame=3 → phase (0 + 3) % 6 = 3 (dim)
+        let (_, st) = marching_cell(0, 3, true);
+        assert_eq!(st.fg, Some(theme::BORDER_DIM));
+    }
+
+    #[test]
+    fn render_in_progress_task_has_marching_border() {
         let mut canvas = Canvas::new(30, 5);
         let node = NodeBox {
             title: "Work".to_string(),
@@ -872,13 +981,24 @@ mod tests {
         };
         render_node(&mut canvas, &node, 0);
 
-        assert_eq!(canvas.get(1, 0).ch, '\u{254C}', "top border h char at frame 0");
-        assert_eq!(canvas.get(1, 2).ch, '\u{254C}', "bottom border h char at frame 0");
+        // Corners should be rounded
+        assert_eq!(canvas.get(0, 0).ch, '\u{256D}', "top-left rounded");
+        assert_eq!(canvas.get(NODE_WIDTH - 1, 0).ch, '\u{256E}', "top-right rounded");
+        assert_eq!(canvas.get(0, 2).ch, '\u{2570}', "bottom-left rounded");
+        assert_eq!(canvas.get(NODE_WIDTH - 1, 2).ch, '\u{256F}', "bottom-right rounded");
+
+        // First few top-edge cells at frame 0: perimeter indices 1,2,3
+        // p=1 → phase (1+0)%6=1 → bright → ─
+        assert_eq!(canvas.get(1, 0).ch, '\u{2500}', "top edge idx 1 bright");
+        // p=3 → phase (3+0)%6=3 → dim → ╌
+        assert_eq!(canvas.get(3, 0).ch, '\u{254C}', "top edge idx 3 dim");
     }
 
     #[test]
-    fn render_in_progress_node_uses_alternate_dashed_at_frame_1() {
-        let mut canvas = Canvas::new(30, 5);
+    fn marching_border_shifts_between_frames() {
+        // At frame 0, position 3 should be dim; at frame 3 it should shift to bright
+        let mut canvas0 = Canvas::new(30, 5);
+        let mut canvas3 = Canvas::new(30, 5);
         let node = NodeBox {
             title: "Work".to_string(),
             status: ItemStatus::InProgress,
@@ -887,10 +1007,32 @@ mod tests {
             y: 0,
             blocked: false,
         };
-        render_node(&mut canvas, &node, 1);
+        render_node(&mut canvas0, &node, 0);
+        render_node(&mut canvas3, &node, 3);
 
-        assert_eq!(canvas.get(1, 0).ch, '\u{2504}', "top border h char at frame 1");
-        assert_eq!(canvas.get(1, 2).ch, '\u{2504}', "bottom border h char at frame 1");
+        // Frame 0, position (3,0): p=3, phase=(3+0)%6=3 → dim (╌)
+        assert_eq!(canvas0.get(3, 0).ch, '\u{254C}');
+        // Frame 3, position (3,0): p=3, phase=(3+3)%6=0 → bright (─)
+        assert_eq!(canvas3.get(3, 0).ch, '\u{2500}');
+    }
+
+    #[test]
+    fn marching_border_epic_has_correct_height() {
+        let mut canvas = Canvas::new(30, 6);
+        let node = NodeBox {
+            title: "Epic".to_string(),
+            status: ItemStatus::InProgress,
+            progress: Some((2, 5)),
+            x: 0,
+            y: 0,
+            blocked: false,
+        };
+        render_node(&mut canvas, &node, 0);
+
+        // Epic height = 4, so bottom border at row 3
+        assert_eq!(canvas.get(0, 0).ch, '\u{256D}', "top-left");
+        assert_eq!(canvas.get(0, 3).ch, '\u{2570}', "bottom-left at row 3");
+        assert_eq!(canvas.get(NODE_WIDTH - 1, 3).ch, '\u{256F}', "bottom-right at row 3");
     }
 
     // ── Edge rendering ─────────────────────────────────────────

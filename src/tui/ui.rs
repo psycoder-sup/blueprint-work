@@ -6,7 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::tui::app::{App, FocusedPanel, GraphLevel, InputMode};
+use crate::models::ItemStatus;
+use crate::tui::app::{App, FocusedPanel, GraphCache, GraphLevel, InputMode};
 use crate::tui::graph_render::{
     Canvas, NodeBox, render_edges, render_node, NODE_HEIGHT_EPIC, NODE_HEIGHT_TASK,
 };
@@ -83,7 +84,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         InputMode::ProjectSelector => "  j/k: Navigate  Enter: Select  Esc: Cancel",
         InputMode::TaskDetail | InputMode::HelpOverlay => "  Esc: Close",
-        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks",
+        InputMode::GraphView => "  Esc: Back  1: Epics  2: Tasks  h/j/k/l: Scroll",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         help_text,
@@ -492,6 +493,7 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
+            Constraint::Length(1),
             Constraint::Length(3),
         ])
         .split(frame.area());
@@ -573,9 +575,16 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
         draw_graph_canvas(frame, app, chunks[1]);
     }
 
+    // Summary bar
+    if let Some(cache) = &app.graph_cache {
+        let summary = Paragraph::new(graph_summary_line(cache))
+            .style(Style::default().bg(theme::BG));
+        frame.render_widget(summary, chunks[2]);
+    }
+
     // Footer
     let footer = Paragraph::new(Line::from(vec![Span::styled(
-        "  Esc: Back  1: Epics  2: Tasks",
+        "  Esc: Back  1: Epics  2: Tasks  h/j/k/l: Scroll",
         Style::default().fg(theme::TEXT_DIM),
     )]))
     .block(
@@ -588,14 +597,86 @@ fn draw_graph_view(frame: &mut Frame, app: &App) {
             ))
             .style(Style::default().bg(theme::BG)),
     );
-    frame.render_widget(footer, chunks[2]);
+    frame.render_widget(footer, chunks[3]);
+}
+
+/// Summary statistics derived from the current graph cache.
+struct GraphSummary {
+    total_nodes: usize,
+    total_edges: usize,
+    blocked_count: usize,
+    done_count: usize,
+}
+
+/// Returns `true` if the node has any incoming edge from a non-done node.
+fn has_incomplete_blocker(node_id: &str, layout: &crate::tui::graph::DagLayout) -> bool {
+    layout.edges.iter().any(|e| {
+        e.to == node_id
+            && layout
+                .nodes
+                .get(&e.from)
+                .is_some_and(|src| src.status != ItemStatus::Done)
+    })
+}
+
+/// Compute summary statistics from a graph cache.
+fn compute_graph_summary(cache: &GraphCache) -> GraphSummary {
+    let nodes = &cache.layout.nodes;
+
+    let done_count = nodes
+        .values()
+        .filter(|n| n.status == ItemStatus::Done)
+        .count();
+
+    let blocked_count = nodes
+        .values()
+        .filter(|n| n.status != ItemStatus::Done)
+        .filter(|n| has_incomplete_blocker(&n.id, &cache.layout))
+        .count();
+
+    GraphSummary {
+        total_nodes: nodes.len(),
+        total_edges: cache.layout.edges.len(),
+        blocked_count,
+        done_count,
+    }
+}
+
+/// Build the summary bar spans for the graph view footer.
+fn graph_summary_line(cache: &GraphCache) -> Line<'static> {
+    let summary = compute_graph_summary(cache);
+    let label = match cache.level {
+        GraphLevel::Epic => "epics",
+        GraphLevel::Task => "tasks",
+    };
+
+    let sep = Style::default().fg(theme::TEXT_DIM);
+    let cyan = Style::default().fg(theme::NEON_CYAN);
+    let green = Style::default().fg(theme::NEON_GREEN);
+    let blocked_fg = if summary.blocked_count > 0 {
+        theme::NEON_ORANGE
+    } else {
+        theme::TEXT_DIM
+    };
+    let blocked = Style::default().fg(blocked_fg);
+
+    Line::from(vec![
+        Span::styled("  ◉ ", cyan),
+        Span::styled(format!("{} {}", summary.total_nodes, label), cyan),
+        Span::styled(" │ ", sep),
+        Span::styled(format!("─▶ {} edges", summary.total_edges), cyan),
+        Span::styled(" │ ", sep),
+        Span::styled(format!("⚠ {} blocked", summary.blocked_count), blocked),
+        Span::styled(" │ ", sep),
+        Span::styled(format!("■ {} done", summary.done_count), green),
+    ])
 }
 
 fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
-    let canvas_width = area.width as usize;
-    let canvas_height = area.height as usize;
+    let viewport_width = area.width as usize;
+    let viewport_height = area.height as usize;
 
-    if canvas_width == 0 || canvas_height == 0 {
+    if viewport_width == 0 || viewport_height == 0 {
         return;
     }
 
@@ -609,12 +690,18 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
             return;
         }
 
-        let mut canvas = Canvas::new(canvas_width, canvas_height);
-
         let (blocked_ids, node_height) = match cache.level {
             GraphLevel::Epic => (&app.blocked_epic_ids, NODE_HEIGHT_EPIC),
             GraphLevel::Task => (&app.blocked_task_ids, NODE_HEIGHT_TASK),
         };
+
+        // Compute the full canvas extent from node positions.
+        let (full_width, full_height) = graph_canvas_extent(cache, node_height);
+
+        // Use the larger of the full extent or the viewport so nodes always render.
+        let canvas_w = full_width.max(viewport_width);
+        let canvas_h = full_height.max(viewport_height);
+        let mut canvas = Canvas::new(canvas_w, canvas_h);
 
         // Render nodes
         for (node_id, &(x, y)) in &cache.node_positions {
@@ -650,12 +737,20 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
             node_height,
         );
 
-        // Blit canvas to frame
-        let lines: Vec<Line> = (0..canvas_height)
-            .map(|y| {
-                let spans: Vec<Span> = (0..canvas_width)
-                    .map(|x| {
-                        let cell = canvas.get(x, y);
+        // Clamp scroll offsets to valid bounds.
+        let max_scroll_x = canvas_w.saturating_sub(viewport_width);
+        let max_scroll_y = canvas_h.saturating_sub(viewport_height);
+        let sx = app.scroll_x.min(max_scroll_x);
+        let sy = app.scroll_y.min(max_scroll_y);
+
+        // Blit the visible portion of the canvas to the frame.
+        let lines: Vec<Line> = (0..viewport_height)
+            .map(|vy| {
+                let cy = sy + vy;
+                let spans: Vec<Span> = (0..viewport_width)
+                    .map(|vx| {
+                        let cx = sx + vx;
+                        let cell = canvas.get(cx, cy);
                         Span::styled(cell.ch.to_string(), cell.style)
                     })
                     .collect();
@@ -665,6 +760,8 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
 
         let paragraph = Paragraph::new(lines).style(Style::default().bg(theme::BG));
         frame.render_widget(paragraph, area);
+
+        render_scroll_indicators(frame, area, sx, sy, max_scroll_x, max_scroll_y);
     } else {
         let msg = match app.graph_mode {
             GraphLevel::Task if app.selected_epic().is_none() => "Select an epic first",
@@ -674,5 +771,260 @@ fn draw_graph_canvas(frame: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(theme::TEXT_DIM).bg(theme::BG))
             .alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(empty, area);
+    }
+}
+
+/// Compute the minimum canvas size needed to contain all nodes (with padding).
+fn graph_canvas_extent(cache: &GraphCache, node_height: usize) -> (usize, usize) {
+    use crate::tui::graph_render::NODE_WIDTH;
+
+    let mut max_x: usize = 0;
+    let mut max_y: usize = 0;
+
+    for &(x, y) in cache.node_positions.values() {
+        max_x = max_x.max(x + NODE_WIDTH);
+        max_y = max_y.max(y + node_height);
+    }
+
+    // Add small padding for edge routing below the lowest nodes.
+    (max_x + 2, max_y + 2)
+}
+
+/// Render scroll indicators showing which directions are scrollable.
+fn render_scroll_indicators(
+    frame: &mut Frame,
+    area: Rect,
+    scroll_x: usize,
+    scroll_y: usize,
+    max_scroll_x: usize,
+    max_scroll_y: usize,
+) {
+    let indicator_style = Style::default().fg(theme::TEXT_DIM);
+
+    if scroll_y > 0 {
+        let label = " \u{25B2} ";
+        let x_pos = area.x + (area.width.saturating_sub(label.len() as u16)) / 2;
+        frame.render_widget(
+            Paragraph::new(Span::styled(label, indicator_style)),
+            Rect::new(x_pos, area.y, label.len() as u16, 1),
+        );
+    }
+
+    if scroll_y < max_scroll_y {
+        let label = " \u{25BC} ";
+        let x_pos = area.x + (area.width.saturating_sub(label.len() as u16)) / 2;
+        let y_pos = area.y + area.height.saturating_sub(1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(label, indicator_style)),
+            Rect::new(x_pos, y_pos, label.len() as u16, 1),
+        );
+    }
+
+    if scroll_x > 0 {
+        let y_pos = area.y + area.height / 2;
+        frame.render_widget(
+            Paragraph::new(Span::styled("\u{25C0}", indicator_style)),
+            Rect::new(area.x, y_pos, 1, 1),
+        );
+    }
+
+    if scroll_x < max_scroll_x {
+        let y_pos = area.y + area.height / 2;
+        let x_pos = area.x + area.width.saturating_sub(1);
+        frame.render_widget(
+            Paragraph::new(Span::styled("\u{25B6}", indicator_style)),
+            Rect::new(x_pos, y_pos, 1, 1),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::graph::{DagLayout, Edge, Node};
+
+    fn test_node(id: &str, status: ItemStatus) -> Node {
+        Node {
+            id: id.to_string(),
+            label: id.to_string(),
+            status,
+            layer: None,
+            x_position: 0,
+        }
+    }
+
+    fn test_edge(from: &str, to: &str) -> Edge {
+        Edge {
+            from: from.to_string(),
+            to: to.to_string(),
+        }
+    }
+
+    fn test_cache(nodes: Vec<Node>, edges: Vec<Edge>, level: GraphLevel) -> GraphCache {
+        GraphCache {
+            layout: DagLayout::new(nodes, edges),
+            node_positions: HashMap::new(),
+            level,
+        }
+    }
+
+    #[test]
+    fn summary_counts_empty_graph() {
+        let cache = test_cache(vec![], vec![], GraphLevel::Epic);
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.total_nodes, 0);
+        assert_eq!(summary.total_edges, 0);
+        assert_eq!(summary.blocked_count, 0);
+        assert_eq!(summary.done_count, 0);
+    }
+
+    #[test]
+    fn summary_counts_all_done() {
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Done),
+                test_node("B", ItemStatus::Done),
+            ],
+            vec![test_edge("A", "B")],
+            GraphLevel::Epic,
+        );
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.total_nodes, 2);
+        assert_eq!(summary.total_edges, 1);
+        assert_eq!(summary.done_count, 2);
+        assert_eq!(summary.blocked_count, 0);
+    }
+
+    #[test]
+    fn summary_counts_blocked_nodes() {
+        // A (todo) -> B (todo): B is blocked by non-done A
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Todo),
+                test_node("B", ItemStatus::Todo),
+            ],
+            vec![test_edge("A", "B")],
+            GraphLevel::Task,
+        );
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.total_nodes, 2);
+        assert_eq!(summary.total_edges, 1);
+        assert_eq!(summary.blocked_count, 1); // B is blocked
+        assert_eq!(summary.done_count, 0);
+    }
+
+    #[test]
+    fn summary_not_blocked_when_blocker_is_done() {
+        // A (done) -> B (todo): B is NOT blocked because A is done
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Done),
+                test_node("B", ItemStatus::Todo),
+            ],
+            vec![test_edge("A", "B")],
+            GraphLevel::Task,
+        );
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.blocked_count, 0);
+        assert_eq!(summary.done_count, 1);
+    }
+
+    #[test]
+    fn summary_done_node_not_counted_as_blocked() {
+        // A (todo) -> B (done): B is done, so not blocked
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Todo),
+                test_node("B", ItemStatus::Done),
+            ],
+            vec![test_edge("A", "B")],
+            GraphLevel::Epic,
+        );
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.blocked_count, 0);
+        assert_eq!(summary.done_count, 1);
+    }
+
+    #[test]
+    fn summary_mixed_statuses() {
+        // A (done) -> C (todo), B (in_progress) -> C (todo)
+        // C is blocked because B (non-done) points to C
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Done),
+                test_node("B", ItemStatus::InProgress),
+                test_node("C", ItemStatus::Todo),
+            ],
+            vec![test_edge("A", "C"), test_edge("B", "C")],
+            GraphLevel::Task,
+        );
+        let summary = compute_graph_summary(&cache);
+        assert_eq!(summary.total_nodes, 3);
+        assert_eq!(summary.total_edges, 2);
+        assert_eq!(summary.done_count, 1);
+        assert_eq!(summary.blocked_count, 1); // C blocked by B
+    }
+
+    #[test]
+    fn summary_label_epic() {
+        let cache = test_cache(
+            vec![test_node("A", ItemStatus::Todo)],
+            vec![],
+            GraphLevel::Epic,
+        );
+        let line = graph_summary_line(&cache);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("epics"), "expected 'epics' in: {text}");
+    }
+
+    #[test]
+    fn summary_label_task() {
+        let cache = test_cache(
+            vec![test_node("A", ItemStatus::Todo)],
+            vec![],
+            GraphLevel::Task,
+        );
+        let line = graph_summary_line(&cache);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("tasks"), "expected 'tasks' in: {text}");
+    }
+
+    #[test]
+    fn summary_blocked_color_orange_when_nonzero() {
+        let cache = test_cache(
+            vec![
+                test_node("A", ItemStatus::Todo),
+                test_node("B", ItemStatus::Todo),
+            ],
+            vec![test_edge("A", "B")],
+            GraphLevel::Task,
+        );
+        let line = graph_summary_line(&cache);
+        let blocked_span = line.spans.iter().find(|s| s.content.contains("blocked")).unwrap();
+        assert_eq!(blocked_span.style.fg, Some(theme::NEON_ORANGE));
+    }
+
+    #[test]
+    fn summary_blocked_color_dim_when_zero() {
+        let cache = test_cache(
+            vec![test_node("A", ItemStatus::Done)],
+            vec![],
+            GraphLevel::Epic,
+        );
+        let line = graph_summary_line(&cache);
+        let blocked_span = line.spans.iter().find(|s| s.content.contains("blocked")).unwrap();
+        assert_eq!(blocked_span.style.fg, Some(theme::TEXT_DIM));
+    }
+
+    #[test]
+    fn summary_done_color_green() {
+        let cache = test_cache(
+            vec![test_node("A", ItemStatus::Done)],
+            vec![],
+            GraphLevel::Epic,
+        );
+        let line = graph_summary_line(&cache);
+        let done_span = line.spans.iter().find(|s| s.content.contains("done")).unwrap();
+        assert_eq!(done_span.style.fg, Some(theme::NEON_GREEN));
     }
 }

@@ -73,12 +73,13 @@ pub struct App {
     pub dep_display_rows: Vec<DependencyDisplayRow>,
     pub last_refresh: Instant,
     pub last_db_watermark: String,
-    /// Global animation frame counter (0–3) for marching border effect.
+    /// Global animation frame counter (0–47) for animation effects.
+    /// Advances every tick (~42ms) for ~24 fps refresh.
     pub animation_frame: u8,
-    /// Tick counter to derive animation frame from the 100ms poll interval.
-    animation_tick: u8,
     pub graph_mode: GraphLevel,
     pub graph_cache: Option<GraphCache>,
+    pub scroll_x: usize,
+    pub scroll_y: usize,
 }
 
 /// Wraps an index by `delta` within `len`, returning `None` when the list is empty.
@@ -149,9 +150,10 @@ impl App {
             last_refresh: Instant::now(),
             last_db_watermark: String::new(),
             animation_frame: 0,
-            animation_tick: 0,
             graph_mode: GraphLevel::Epic,
             graph_cache: None,
+            scroll_x: 0,
+            scroll_y: 0,
         };
         app.refresh_data();
         Ok(app)
@@ -161,7 +163,7 @@ impl App {
         while self.running {
             terminal.draw(|frame| ui::draw(frame, self))?;
 
-            if event::poll(Duration::from_millis(100))? {
+            if event::poll(Duration::from_millis(42))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         self.handle_key(key);
@@ -169,12 +171,8 @@ impl App {
                 }
             }
 
-            // Advance animation frame every 5 ticks (~500ms at 100ms poll).
-            self.animation_tick += 1;
-            if self.animation_tick >= 5 {
-                self.animation_tick = 0;
-                self.animation_frame = (self.animation_frame + 1) % 4;
-            }
+            // Advance animation frame every tick (~42ms ≈ 24 fps).
+            self.animation_frame = (self.animation_frame + 1) % 48;
 
             // Auto-refresh: poll DB for changes every ~1 second
             if self.last_refresh.elapsed() >= Duration::from_secs(1) {
@@ -296,6 +294,7 @@ impl App {
             KeyCode::Char('p') => self.open_project_selector(),
             KeyCode::Char('?') => self.mode = InputMode::HelpOverlay,
             KeyCode::Char('d') => {
+                self.reset_scroll();
                 self.graph_mode = GraphLevel::Epic;
                 self.build_epic_graph();
                 self.mode = InputMode::GraphView;
@@ -343,13 +342,27 @@ impl App {
             }
             KeyCode::Char('1') => {
                 if self.graph_mode != GraphLevel::Epic {
+                    self.reset_scroll();
                     self.graph_mode = GraphLevel::Epic;
                     self.build_epic_graph();
                 }
             }
             KeyCode::Char('2') => {
+                self.reset_scroll();
                 self.graph_mode = GraphLevel::Task;
                 self.build_task_graph();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.scroll_y = self.scroll_y.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.scroll_y = self.scroll_y.saturating_sub(1);
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.scroll_x = self.scroll_x.saturating_add(1);
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.scroll_x = self.scroll_x.saturating_sub(1);
             }
             _ => {}
         }
@@ -524,6 +537,11 @@ impl App {
         self.selected_task_idx = 0;
         self.refresh_data();
         self.mode = InputMode::Normal;
+    }
+
+    fn reset_scroll(&mut self) {
+        self.scroll_x = 0;
+        self.scroll_y = 0;
     }
 }
 
@@ -1550,5 +1568,123 @@ mod tests {
         // 3 tasks, no deps → all orphans
         assert_eq!(cache.layout.orphans.len(), 3);
         assert_eq!(cache.node_positions.len(), 3);
+    }
+
+    // ==================== Scroll tests ====================
+
+    #[test]
+    fn scroll_initial_state_is_zero() {
+        let (app, _dir) = app_with_epics(2);
+        assert_eq!(app.scroll_x, 0);
+        assert_eq!(app.scroll_y, 0);
+    }
+
+    #[test]
+    fn scroll_j_k_adjusts_scroll_y() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.mode, InputMode::GraphView);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.scroll_y, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.scroll_y, 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.scroll_y, 1);
+    }
+
+    #[test]
+    fn scroll_h_l_adjusts_scroll_x() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.scroll_x, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.scroll_x, 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.scroll_x, 1);
+    }
+
+    #[test]
+    fn scroll_arrow_keys_work() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.scroll_y, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.scroll_y, 0);
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_eq!(app.scroll_x, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(app.scroll_x, 0);
+    }
+
+    #[test]
+    fn scroll_k_does_not_go_below_zero() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.scroll_y, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.scroll_y, 0);
+    }
+
+    #[test]
+    fn scroll_h_does_not_go_below_zero() {
+        let (mut app, _dir) = app_with_epics(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.scroll_x, 0);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(app.scroll_x, 0);
+    }
+
+    #[test]
+    fn scroll_resets_on_view_switch_1() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        // Scroll down
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.scroll_y, 1);
+        assert_eq!(app.scroll_x, 1);
+
+        // Switch to tasks
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(app.scroll_x, 0);
+        assert_eq!(app.scroll_y, 0);
+    }
+
+    #[test]
+    fn scroll_resets_on_view_switch_2() {
+        let (mut app, _dir) = app_with_tasks(2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+
+        // Switch to task then scroll
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.scroll_y, 1);
+
+        // Switch back to epic
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.scroll_x, 0);
+        assert_eq!(app.scroll_y, 0);
+    }
+
+    #[test]
+    fn scroll_resets_when_entering_graph_view() {
+        let (mut app, _dir) = app_with_epics(2);
+
+        // Manually set scroll values as if they were leftover
+        app.scroll_x = 5;
+        app.scroll_y = 10;
+
+        // Enter graph view
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(app.scroll_x, 0);
+        assert_eq!(app.scroll_y, 0);
     }
 }
