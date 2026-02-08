@@ -8,6 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::db::Database;
+use crate::settings::Settings;
 use crate::db::dependency::{get_blocked_by, get_blockers, is_blocked};
 use crate::db::epic::list_epics;
 use crate::db::project::list_projects;
@@ -868,6 +869,14 @@ impl App {
         self.selected_task_idx = 0;
         self.refresh_data();
         self.mode = InputMode::Normal;
+
+        // Auto-initialize .blueprint/setting.json if the directory exists but the file doesn't
+        if let (Some(project), Ok(cwd)) = (self.selected_project(), std::env::current_dir())
+            && Settings::blueprint_dir_exists_in(&cwd)
+            && !Settings::exists_in(&cwd)
+        {
+            let _ = Settings::save_to(&cwd, &project.id);
+        }
     }
 
     fn reset_scroll(&mut self) {
