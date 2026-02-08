@@ -5,21 +5,14 @@ use crate::models::dependency::{AddDependencyInput, DependencyType};
 
 use super::{require_str, tool_error, tool_result};
 
-struct DependencyParams {
-    blocker_type: DependencyType,
-    blocker_id: String,
-    blocked_type: DependencyType,
-    blocked_id: String,
-}
-
 fn parse_dependency_type(args: &Value, field: &str) -> Result<DependencyType, Value> {
     let s = require_str(args, field)?;
     s.parse::<DependencyType>()
         .map_err(|_| tool_error(&format!("Invalid {field}: {s}")))
 }
 
-fn parse_dependency_params(args: &Value) -> Result<DependencyParams, Value> {
-    Ok(DependencyParams {
+fn parse_dependency_input(args: &Value) -> Result<AddDependencyInput, Value> {
+    Ok(AddDependencyInput {
         blocker_type: parse_dependency_type(args, "blocker_type")?,
         blocker_id: require_str(args, "blocker_id")?,
         blocked_type: parse_dependency_type(args, "blocked_type")?,
@@ -28,16 +21,9 @@ fn parse_dependency_params(args: &Value) -> Result<DependencyParams, Value> {
 }
 
 pub(super) fn handle_add_dependency(args: &Value, db: &Database) -> Value {
-    let params = match parse_dependency_params(args) {
-        Ok(p) => p,
+    let input = match parse_dependency_input(args) {
+        Ok(v) => v,
         Err(e) => return e,
-    };
-
-    let input = AddDependencyInput {
-        blocker_type: params.blocker_type,
-        blocker_id: params.blocker_id,
-        blocked_type: params.blocked_type,
-        blocked_id: params.blocked_id,
     };
 
     match dep_db::add_dependency(db, input) {
@@ -58,17 +44,17 @@ pub(super) fn handle_add_dependency(args: &Value, db: &Database) -> Value {
 }
 
 pub(super) fn handle_remove_dependency(args: &Value, db: &Database) -> Value {
-    let params = match parse_dependency_params(args) {
-        Ok(p) => p,
+    let input = match parse_dependency_input(args) {
+        Ok(v) => v,
         Err(e) => return e,
     };
 
     match dep_db::remove_dependency(
         db,
-        &params.blocker_type,
-        &params.blocker_id,
-        &params.blocked_type,
-        &params.blocked_id,
+        &input.blocker_type,
+        &input.blocker_id,
+        &input.blocked_type,
+        &input.blocked_id,
     ) {
         Ok(true) => tool_result(&json!({ "removed": true })),
         Ok(false) => tool_result(&json!({ "removed": false, "message": "Dependency not found" })),

@@ -6,15 +6,14 @@ use crate::db::project as project_db;
 use crate::db::status as status_db;
 use crate::db::Database;
 
-use super::{optional_str, tool_error, tool_result};
+use super::{resolve_optional_project_id, tool_error, tool_result};
 
 pub(super) fn handle_get_status(
     args: &Value,
     db: &Database,
     default_project_id: Option<&str>,
 ) -> Value {
-    let project_id = optional_str(args, "project_id")
-        .or_else(|| default_project_id.map(String::from));
+    let project_id = resolve_optional_project_id(args, default_project_id);
 
     let project_label = match &project_id {
         Some(pid) => match project_db::get_project(db, pid) {

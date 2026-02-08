@@ -2,24 +2,24 @@ use serde_json::{json, Value};
 
 use crate::db::dependency as dep_db;
 use crate::db::epic as epic_db;
-use crate::db::project as project_db;
 use crate::db::task as task_db;
 use crate::db::Database;
 use crate::models::dependency::DependencyType;
 use crate::models::epic::{CreateEpicInput, ItemStatus, UpdateEpicInput};
 
-use super::{optional_str, parse_optional_status, require_str, tool_error, tool_result};
+use super::{
+    optional_str, parse_optional_status, require_str, resolve_optional_project_id,
+    resolve_project_id, tool_error, tool_result, validate_project_exists,
+};
 
 pub(super) fn handle_create_epic(
     args: &Value,
     db: &Database,
     default_project_id: Option<&str>,
 ) -> Value {
-    let project_id = match optional_str(args, "project_id")
-        .or_else(|| default_project_id.map(String::from))
-    {
-        Some(v) => v,
-        None => return tool_error("Missing required parameter: project_id"),
+    let project_id = match resolve_project_id(args, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return e,
     };
     let title = match require_str(args, "title") {
         Ok(v) => v,
@@ -30,14 +30,8 @@ pub(super) fn handle_create_epic(
         Err(e) => return e,
     };
 
-    // Validate project exists
-    match project_db::get_project(db, &project_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return tool_error(&format!("Project not found: {project_id}")),
-        Err(e) => {
-            eprintln!("create_epic error: {e:#}");
-            return tool_error("Failed to create epic");
-        }
+    if let Err(e) = validate_project_exists(db, &project_id) {
+        return e;
     }
 
     match epic_db::create_epic(db, CreateEpicInput { project_id, title, description }) {
@@ -54,8 +48,7 @@ pub(super) fn handle_list_epics(
     db: &Database,
     default_project_id: Option<&str>,
 ) -> Value {
-    let project_id = optional_str(args, "project_id")
-        .or_else(|| default_project_id.map(String::from));
+    let project_id = resolve_optional_project_id(args, default_project_id);
     let status = match parse_optional_status::<ItemStatus>(args) {
         Ok(s) => s,
         Err(e) => return e,

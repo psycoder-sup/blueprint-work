@@ -11,16 +11,11 @@ use types::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, JSONRPC_VERSION};
 
 pub struct McpServer {
     db: Database,
-    default_project_id: Option<String>,
 }
 
 impl McpServer {
     pub fn new(db: Database) -> Self {
-        let settings = Settings::load();
-        Self {
-            db,
-            default_project_id: settings.project_id,
-        }
+        Self { db }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -134,8 +129,10 @@ impl McpServer {
         };
 
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        let settings = Settings::load();
+        let default_project_id = settings.project_id;
 
-        match tools::dispatch_tool(name, &args, &self.db, self.default_project_id.as_deref()) {
+        match tools::dispatch_tool(name, &args, &self.db, default_project_id.as_deref()) {
             Some(result) => JsonRpcResponse::success(id, result),
             None => JsonRpcResponse::error(
                 id,
@@ -157,7 +154,7 @@ mod tests {
         let path = dir.path().join("test.db");
         let db = Database::open(&path).unwrap();
         db.migrate().unwrap();
-        (McpServer { db, default_project_id: None }, dir)
+        (McpServer::new(db), dir)
     }
 
     #[test]

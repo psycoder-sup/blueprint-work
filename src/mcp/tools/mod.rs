@@ -278,6 +278,42 @@ pub(crate) fn parse_optional_status<T: std::str::FromStr>(args: &Value) -> Resul
     }
 }
 
+/// Resolve `project_id` from args, falling back to the server default.
+/// Returns `None` when neither source provides a value.
+pub(crate) fn resolve_optional_project_id(
+    args: &Value,
+    default_project_id: Option<&str>,
+) -> Option<String> {
+    optional_str(args, "project_id")
+        .or_else(|| default_project_id.map(String::from))
+}
+
+/// Resolve `project_id` from args, falling back to the server default.
+/// Returns an error [`Value`] when neither source provides a value.
+pub(crate) fn resolve_project_id(
+    args: &Value,
+    default_project_id: Option<&str>,
+) -> Result<String, Value> {
+    resolve_optional_project_id(args, default_project_id)
+        .ok_or_else(|| tool_error("Missing required parameter: project_id"))
+}
+
+/// Validate that a project exists in the database.
+/// Returns an error [`Value`] when the project is missing or the lookup fails.
+pub(crate) fn validate_project_exists(
+    db: &Database,
+    project_id: &str,
+) -> Result<(), Value> {
+    match crate::db::project::get_project(db, project_id) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(tool_error(&format!("Project not found: {project_id}"))),
+        Err(e) => {
+            eprintln!("validate_project error: {e:#}");
+            Err(tool_error("Failed to validate project"))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -308,16 +344,7 @@ pub fn dispatch_tool(
         "remove_dependency" => dependency::handle_remove_dependency(args, db),
         "get_status" => status::handle_get_status(args, db, default_project_id),
         "feed_prd" => prd::handle_feed_prd(args, db, default_project_id),
-        _ => {
-            let is_known = tool_definitions()
-                .iter()
-                .any(|t| t["name"].as_str() == Some(name));
-            return if is_known {
-                Some(tool_error(&format!("Tool '{name}' not yet implemented")))
-            } else {
-                None
-            };
-        }
+        _ => return None,
     };
     Some(result)
 }

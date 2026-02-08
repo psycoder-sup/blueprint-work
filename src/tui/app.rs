@@ -874,8 +874,9 @@ impl App {
         if let (Some(project), Ok(cwd)) = (self.selected_project(), std::env::current_dir())
             && Settings::blueprint_dir_exists_in(&cwd)
             && !Settings::exists_in(&cwd)
+            && let Err(e) = Settings::save_to(&cwd, &project.id)
         {
-            let _ = Settings::save_to(&cwd, &project.id);
+            eprintln!("Warning: failed to write .blueprint/setting.json: {e}");
         }
     }
 

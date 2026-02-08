@@ -1,22 +1,19 @@
 use serde_json::{json, Value};
 
 use crate::db::prd as prd_db;
-use crate::db::project as project_db;
 use crate::db::Database;
 use crate::models::prd::CreatePrdInput;
 
-use super::{optional_str, require_str, tool_error, tool_result};
+use super::{require_str, resolve_project_id, tool_error, tool_result, validate_project_exists};
 
 pub(super) fn handle_feed_prd(
     args: &Value,
     db: &Database,
     default_project_id: Option<&str>,
 ) -> Value {
-    let project_id = match optional_str(args, "project_id")
-        .or_else(|| default_project_id.map(String::from))
-    {
-        Some(v) => v,
-        None => return tool_error("Missing required parameter: project_id"),
+    let project_id = match resolve_project_id(args, default_project_id) {
+        Ok(v) => v,
+        Err(e) => return e,
     };
     let title = match require_str(args, "title") {
         Ok(v) => v,
@@ -27,14 +24,8 @@ pub(super) fn handle_feed_prd(
         Err(e) => return e,
     };
 
-    // Validate project exists
-    match project_db::get_project(db, &project_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return tool_error(&format!("Project not found: {project_id}")),
-        Err(e) => {
-            eprintln!("feed_prd error: {e:#}");
-            return tool_error("Failed to validate project");
-        }
+    if let Err(e) = validate_project_exists(db, &project_id) {
+        return e;
     }
 
     let prd = match prd_db::create_prd(
