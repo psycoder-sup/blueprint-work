@@ -30,12 +30,39 @@ fn row_to_task(row: &Row) -> rusqlite::Result<BlueTask> {
 
 pub fn create_task(db: &Database, input: CreateTaskInput) -> Result<BlueTask> {
     let id = ulid::Ulid::new().to_string();
-    db.conn()
-        .execute(
-            "INSERT INTO tasks (id, epic_id, title, description) VALUES (?1, ?2, ?3, ?4)",
-            [&id, &input.epic_id, &input.title, &input.description],
+
+    let tx = db
+        .conn()
+        .unchecked_transaction()
+        .context("failed to begin transaction for task creation")?;
+
+    let epic_short_id: String = tx
+        .query_row(
+            "SELECT short_id FROM epics WHERE id = ?1",
+            [&input.epic_id],
+            |row| row.get::<_, Option<String>>(0),
         )
-        .context("failed to insert task (check that epic_id is valid)")?;
+        .context("failed to get epic short_id (check that epic_id is valid)")?
+        .context("epic has no short_id assigned")?;
+
+    let max_num: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(CAST(SUBSTR(short_id, INSTR(short_id, '-T') + 2) AS INTEGER)), 0) \
+             FROM tasks \
+             WHERE epic_id = ?1 AND short_id IS NOT NULL",
+            [&input.epic_id],
+            |row| row.get(0),
+        )
+        .context("failed to query next task short_id")?;
+    let short_id = format!("{epic_short_id}-T{}", max_num + 1);
+
+    tx.execute(
+        "INSERT INTO tasks (id, epic_id, title, description, short_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        [&id, &input.epic_id, &input.title, &input.description, &short_id],
+    )
+    .context("failed to insert task (check that epic_id is valid)")?;
+
+    tx.commit().context("failed to commit task creation")?;
 
     get_task(db, &id)?.context("task not found after insert")
 }
@@ -203,6 +230,7 @@ mod tests {
         assert_eq!(task.title, "My Task");
         assert_eq!(task.description, "Task description");
         assert_eq!(task.status, ItemStatus::Todo);
+        assert_eq!(task.short_id, Some("E1-T1".to_string()));
     }
 
     #[test]
@@ -484,5 +512,58 @@ mod tests {
         // Delete
         assert!(delete_task(&db, &task.id).unwrap());
         assert!(get_task(&db, &task.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_create_assigns_sequential_short_ids() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let epic = create_test_epic(&db, &project.id);
+
+        let make_task = |title: &str| {
+            create_task(
+                &db,
+                CreateTaskInput {
+                    epic_id: epic.id.clone(),
+                    title: title.to_string(),
+                    description: String::new(),
+                },
+            )
+            .unwrap()
+        };
+
+        let t1 = make_task("First");
+        let t2 = make_task("Second");
+        let t3 = make_task("Third");
+
+        assert_eq!(t1.short_id, Some("E1-T1".to_string()));
+        assert_eq!(t2.short_id, Some("E1-T2".to_string()));
+        assert_eq!(t3.short_id, Some("E1-T3".to_string()));
+    }
+
+    #[test]
+    fn test_short_ids_scoped_to_epic() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+        let e1 = create_test_epic(&db, &project.id);
+        let e2 = create_test_epic(&db, &project.id);
+
+        let make_task = |epic_id: &str, title: &str| {
+            create_task(
+                &db,
+                CreateTaskInput {
+                    epic_id: epic_id.to_string(),
+                    title: title.to_string(),
+                    description: String::new(),
+                },
+            )
+            .unwrap()
+        };
+
+        let e1_t1 = make_task(&e1.id, "E1 Task");
+        let e2_t1 = make_task(&e2.id, "E2 Task");
+
+        assert_eq!(e1_t1.short_id, Some("E1-T1".to_string()));
+        assert_eq!(e2_t1.short_id, Some("E2-T1".to_string()));
     }
 }

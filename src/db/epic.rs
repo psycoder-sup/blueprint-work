@@ -34,12 +34,30 @@ fn row_to_epic(row: &Row) -> rusqlite::Result<Epic> {
 
 pub fn create_epic(db: &Database, input: CreateEpicInput) -> Result<Epic> {
     let id = ulid::Ulid::new().to_string();
-    db.conn()
-        .execute(
-            "INSERT INTO epics (id, project_id, title, description) VALUES (?1, ?2, ?3, ?4)",
-            [&id, &input.project_id, &input.title, &input.description],
+
+    let tx = db
+        .conn()
+        .unchecked_transaction()
+        .context("failed to begin transaction for epic creation")?;
+
+    let max_num: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(CAST(SUBSTR(short_id, 2) AS INTEGER)), 0) \
+             FROM epics \
+             WHERE project_id = ?1 AND short_id IS NOT NULL",
+            [&input.project_id],
+            |row| row.get(0),
         )
-        .context("failed to insert epic (check that project_id is valid)")?;
+        .context("failed to query next epic short_id")?;
+    let short_id = format!("E{}", max_num + 1);
+
+    tx.execute(
+        "INSERT INTO epics (id, project_id, title, description, short_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        [&id, &input.project_id, &input.title, &input.description, &short_id],
+    )
+    .context("failed to insert epic (check that project_id is valid)")?;
+
+    tx.commit().context("failed to commit epic creation")?;
 
     get_epic(db, &id)?.context("epic not found after insert")
 }
@@ -208,6 +226,7 @@ mod tests {
         assert_eq!(epic.title, "My Epic");
         assert_eq!(epic.description, "Epic description");
         assert_eq!(epic.status, ItemStatus::Todo);
+        assert_eq!(epic.short_id, Some("E1".to_string()));
         assert_eq!(epic.task_count, 0);
     }
 
@@ -503,5 +522,56 @@ mod tests {
         // Delete
         assert!(delete_epic(&db, &epic.id).unwrap());
         assert!(get_epic(&db, &epic.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_create_assigns_sequential_short_ids() {
+        let (db, _dir) = open_temp_db();
+        let project = create_test_project(&db);
+
+        let make_epic = |title: &str| {
+            create_epic(
+                &db,
+                CreateEpicInput {
+                    project_id: project.id.clone(),
+                    title: title.to_string(),
+                    description: String::new(),
+                },
+            )
+            .unwrap()
+        };
+
+        let e1 = make_epic("First");
+        let e2 = make_epic("Second");
+        let e3 = make_epic("Third");
+
+        assert_eq!(e1.short_id, Some("E1".to_string()));
+        assert_eq!(e2.short_id, Some("E2".to_string()));
+        assert_eq!(e3.short_id, Some("E3".to_string()));
+    }
+
+    #[test]
+    fn test_short_ids_scoped_to_project() {
+        let (db, _dir) = open_temp_db();
+        let p1 = create_test_project(&db);
+        let p2 = create_test_project(&db);
+
+        let make_epic = |project_id: &str, title: &str| {
+            create_epic(
+                &db,
+                CreateEpicInput {
+                    project_id: project_id.to_string(),
+                    title: title.to_string(),
+                    description: String::new(),
+                },
+            )
+            .unwrap()
+        };
+
+        let p1_e1 = make_epic(&p1.id, "P1 Epic");
+        let p2_e1 = make_epic(&p2.id, "P2 Epic");
+
+        assert_eq!(p1_e1.short_id, Some("E1".to_string()));
+        assert_eq!(p2_e1.short_id, Some("E1".to_string()));
     }
 }
