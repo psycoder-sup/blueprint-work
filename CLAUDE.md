@@ -15,4 +15,3 @@ This project uses Blueprint MCP to track implementation work. When working on ta
 ### Creating tasks
 
 - Before calling `create_task`, read `.blueprint/task_template.md` for description templates.
-- Pick the template that best matches the task type and structure the task description accordingly.
