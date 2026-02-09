@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed:*)",
+      "mcp__blueprint__create_project",
+      "mcp__blueprint__list_projects",
+      "mcp__blueprint__get_project",
+      "mcp__blueprint__update_project",
+      "mcp__blueprint__delete_project",
+      "mcp__blueprint__create_epic",
+      "mcp__blueprint__list_epics",
+      "mcp__blueprint__get_epic",
+      "mcp__blueprint__update_epic",
+      "mcp__blueprint__delete_epic",
+      "mcp__blueprint__create_task",
+      "mcp__blueprint__list_tasks",
+      "mcp__blueprint__get_task",
+      "mcp__blueprint__update_task",
+      "mcp__blueprint__delete_task",
+      "mcp__blueprint__add_dependency",
+      "mcp__blueprint__remove_dependency",
+      "mcp__blueprint__get_status",
+      "mcp__blueprint__feed_prd"
+    ]
+  }
+}
