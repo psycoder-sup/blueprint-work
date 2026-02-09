@@ -55,6 +55,14 @@ pub fn project_status_style(status: &ProjectStatus) -> Style {
 
 pub const BLOCKED_SYMBOL: &str = "⚠";
 
+// ── Session indicator ─────────────────────────────────────────────
+
+pub const SESSION_SYMBOL: &str = "\u{26A1}";
+
+pub fn session_style() -> Style {
+    Style::default().fg(NEON_GREEN)
+}
+
 pub fn blocked_style() -> Style {
     Style::default().fg(NEON_ORANGE)
 }

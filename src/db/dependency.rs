@@ -203,6 +203,7 @@ mod tests {
                 epic_id: epic_id.to_string(),
                 title: "Test Task".to_string(),
                 description: "For dependency tests".to_string(),
+                session_id: None,
             },
         )
         .unwrap()

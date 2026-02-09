@@ -10,6 +10,7 @@ pub struct BlueTask {
     pub description: String,
     pub status: ItemStatus,
     pub short_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -18,6 +19,7 @@ pub struct CreateTaskInput {
     pub epic_id: String,
     pub title: String,
     pub description: String,
+    pub session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -25,4 +27,5 @@ pub struct UpdateTaskInput {
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<ItemStatus>,
+    pub session_id: Option<Option<String>>,
 }

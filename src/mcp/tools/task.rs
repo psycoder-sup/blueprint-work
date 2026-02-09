@@ -8,7 +8,7 @@ use crate::models::dependency::DependencyType;
 use crate::models::epic::ItemStatus;
 use crate::models::task::{CreateTaskInput, UpdateTaskInput};
 
-use super::{optional_str, parse_optional_status, require_str, tool_error, tool_result};
+use super::{optional_str, parse_optional_status, require_str, resolve_optional_project_id, tool_error, tool_result};
 
 pub(super) fn handle_create_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let epic_id = match require_str(args, "epic_id") {
@@ -38,7 +38,9 @@ pub(super) fn handle_create_task(args: &Value, db: &Database, default_project_id
         }
     }
 
-    match task_db::create_task(db, CreateTaskInput { epic_id, title, description }) {
+    let session_id = optional_str(args, "session_id");
+
+    match task_db::create_task(db, CreateTaskInput { epic_id, title, description, session_id }) {
         Ok(task) => tool_result(&task),
         Err(e) => {
             eprintln!("create_task error: {e:#}");
@@ -55,12 +57,13 @@ pub(super) fn handle_list_tasks(args: &Value, db: &Database, default_project_id:
         },
         None => None,
     };
+    let project_id = resolve_optional_project_id(args, default_project_id);
     let status = match parse_optional_status::<ItemStatus>(args) {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    match task_db::list_tasks(db, epic_id.as_deref(), status) {
+    match task_db::list_tasks(db, epic_id.as_deref(), project_id.as_deref(), status) {
         Ok(tasks) => tool_result(&tasks),
         Err(e) => {
             eprintln!("list_tasks error: {e:#}");
@@ -122,10 +125,18 @@ pub(super) fn handle_update_task(args: &Value, db: &Database, default_project_id
         Err(e) => return e,
     };
 
+    // None = don't touch, Some(None) = clear, Some(Some(v)) = set
+    let session_id = match optional_str(args, "session_id") {
+        Some(s) if s.is_empty() => Some(None),
+        Some(s) => Some(Some(s)),
+        None => None,
+    };
+
     let input = UpdateTaskInput {
         title: optional_str(args, "title"),
         description: optional_str(args, "description"),
         status,
+        session_id,
     };
 
     match task_db::update_task(db, &id, input) {
@@ -767,5 +778,92 @@ mod tests {
         // Verify gone
         let get_result = dispatch_tool("get_task", &json!({"id": id}), &db, None).unwrap();
         assert_eq!(get_result["isError"], true);
+    }
+
+    fn two_projects_with_tasks(db: &Database) -> (String, String) {
+        let pid_a = {
+            let r = dispatch_tool(
+                "create_project",
+                &json!({"name": "Project A", "description": "a"}),
+                db,
+                None,
+            )
+            .unwrap();
+            parse_response(&r)["id"].as_str().unwrap().to_string()
+        };
+        let eid_a = create_test_epic(db, &pid_a);
+        dispatch_tool(
+            "create_task",
+            &json!({"epic_id": eid_a, "title": "Task A", "description": "d"}),
+            db,
+            None,
+        );
+
+        let pid_b = {
+            let r = dispatch_tool(
+                "create_project",
+                &json!({"name": "Project B", "description": "b"}),
+                db,
+                None,
+            )
+            .unwrap();
+            parse_response(&r)["id"].as_str().unwrap().to_string()
+        };
+        let eid_b = create_test_epic(db, &pid_b);
+        dispatch_tool(
+            "create_task",
+            &json!({"epic_id": eid_b, "title": "Task B", "description": "d"}),
+            db,
+            None,
+        );
+
+        (pid_a, pid_b)
+    }
+
+    #[test]
+    fn test_list_tasks_default_project_scoping() {
+        let (db, _dir) = test_db();
+        let (pid_a, pid_b) = two_projects_with_tasks(&db);
+
+        // With default_project_id set to A, list_tasks (no args) returns only A's tasks
+        let result = dispatch_tool("list_tasks", &json!({}), &db, Some(&pid_a)).unwrap();
+        let tasks = parse_response(&result);
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["title"], "Task A");
+
+        // With default_project_id set to B, returns only B's tasks
+        let result = dispatch_tool("list_tasks", &json!({}), &db, Some(&pid_b)).unwrap();
+        let tasks = parse_response(&result);
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["title"], "Task B");
+    }
+
+    #[test]
+    fn test_list_tasks_project_filter_explicit() {
+        let (db, _dir) = test_db();
+        let (pid_a, pid_b) = two_projects_with_tasks(&db);
+
+        // Explicit project_id arg overrides default
+        let result = dispatch_tool(
+            "list_tasks",
+            &json!({"project_id": pid_b}),
+            &db,
+            Some(&pid_a),
+        )
+        .unwrap();
+        let tasks = parse_response(&result);
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["title"], "Task B");
+    }
+
+    #[test]
+    fn test_list_tasks_no_default_no_filter_returns_all() {
+        let (db, _dir) = test_db();
+        two_projects_with_tasks(&db);
+
+        // No default project, no args - returns all tasks
+        let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
+        let tasks = parse_response(&result);
+        assert_eq!(tasks.as_array().unwrap().len(), 2);
     }
 }

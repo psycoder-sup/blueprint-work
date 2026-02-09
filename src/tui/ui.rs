@@ -246,6 +246,13 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
             spans.extend(short_id_span(task.short_id.as_deref()));
             spans.push(Span::styled(&task.title, title_style));
 
+            if task.session_id.is_some() {
+                spans.push(Span::styled(
+                    format!(" {}", theme::SESSION_SYMBOL),
+                    theme::session_style(),
+                ));
+            }
+
             if app.blocked_task_ids.contains(&task.id) {
                 spans.push(Span::styled(
                     format!(" {}", theme::BLOCKED_SYMBOL),
@@ -299,6 +306,17 @@ fn draw_task_detail(frame: &mut Frame, app: &App) {
         ]),
         Line::from(""),
     ];
+
+    if task.session_id.is_some() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} Session: ", theme::SESSION_SYMBOL),
+                theme::session_style(),
+            ),
+            Span::styled("active", Style::default().fg(theme::TEXT_DIM)),
+        ]));
+        lines.push(Line::from(""));
+    }
 
     if !task.description.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -1348,6 +1366,7 @@ mod tests {
             short_id: short_id.map(String::from),
             created_at: String::new(),
             updated_at: String::new(),
+            session_id: None,
         }
     }
 

@@ -5,7 +5,8 @@ use crate::db::Database;
 use crate::db::resolve::{classify_id, IdKind};
 use crate::models::{BlueTask, CreateTaskInput, ItemStatus, UpdateTaskInput};
 
-const SELECT_COLUMNS: &str = "id, epic_id, title, description, status, short_id, created_at, updated_at";
+const SELECT_COLUMNS: &str = "id, epic_id, title, description, status, short_id, session_id, created_at, updated_at";
+const SELECT_COLUMNS_QUALIFIED: &str = "tasks.id, tasks.epic_id, tasks.title, tasks.description, tasks.status, tasks.short_id, tasks.session_id, tasks.created_at, tasks.updated_at";
 
 fn row_to_task(row: &Row) -> rusqlite::Result<BlueTask> {
     let status_str: String = row.get("status")?;
@@ -24,6 +25,7 @@ fn row_to_task(row: &Row) -> rusqlite::Result<BlueTask> {
         description: row.get("description")?,
         status,
         short_id: row.get("short_id")?,
+        session_id: row.get("session_id")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -58,8 +60,8 @@ pub fn create_task(db: &Database, input: CreateTaskInput) -> Result<BlueTask> {
     let short_id = format!("{epic_short_id}-T{}", max_num + 1);
 
     tx.execute(
-        "INSERT INTO tasks (id, epic_id, title, description, short_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-        [&id, &input.epic_id, &input.title, &input.description, &short_id],
+        "INSERT INTO tasks (id, epic_id, title, description, short_id, session_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![&id, &input.epic_id, &input.title, &input.description, &short_id, &input.session_id],
     )
     .context("failed to insert task (check that epic_id is valid)")?;
 
@@ -82,21 +84,30 @@ pub fn get_task(db: &Database, id: &str) -> Result<Option<BlueTask>> {
 pub fn list_tasks(
     db: &Database,
     epic_id: Option<&str>,
+    project_id: Option<&str>,
     status: Option<ItemStatus>,
 ) -> Result<Vec<BlueTask>> {
-    let base = format!("SELECT {SELECT_COLUMNS} FROM tasks");
-    let tail = "ORDER BY created_at DESC";
+    let base = if project_id.is_some() {
+        format!("SELECT {SELECT_COLUMNS_QUALIFIED} FROM tasks JOIN epics ON tasks.epic_id = epics.id")
+    } else {
+        format!("SELECT {SELECT_COLUMNS} FROM tasks")
+    };
+    let tail = "ORDER BY tasks.created_at DESC";
 
     let mut conditions: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
+    if let Some(pid) = project_id {
+        params.push(Box::new(pid.to_string()));
+        conditions.push(format!("epics.project_id = ?{}", params.len()));
+    }
     if let Some(eid) = epic_id {
         params.push(Box::new(eid.to_string()));
-        conditions.push(format!("epic_id = ?{}", params.len()));
+        conditions.push(format!("tasks.epic_id = ?{}", params.len()));
     }
     if let Some(s) = status {
         params.push(Box::new(s.as_str().to_string()));
-        conditions.push(format!("status = ?{}", params.len()));
+        conditions.push(format!("tasks.status = ?{}", params.len()));
     }
 
     let sql = if conditions.is_empty() {
@@ -131,6 +142,9 @@ pub fn update_task(db: &Database, id: &str, input: UpdateTaskInput) -> Result<Bl
     }
     if let Some(status) = input.status {
         bind("status", Box::new(status.as_str().to_string()));
+    }
+    if let Some(session_id) = input.session_id {
+        bind("session_id", Box::new(session_id));
     }
 
     set_clauses.push("updated_at = datetime('now')".to_string());
@@ -278,6 +292,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "My Task".to_string(),
                 description: "Task description".to_string(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -300,6 +315,7 @@ mod tests {
                 epic_id: "nonexistent".to_string(),
                 title: "Orphan".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         );
 
@@ -318,6 +334,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Lookup".to_string(),
                 description: "desc".to_string(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -343,6 +360,7 @@ mod tests {
                 epic_id: e1.id.clone(),
                 title: "Task A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -352,15 +370,16 @@ mod tests {
                 epic_id: e2.id.clone(),
                 title: "Task B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
 
-        let e1_tasks = list_tasks(&db, Some(&e1.id), None).unwrap();
+        let e1_tasks = list_tasks(&db, Some(&e1.id), None, None).unwrap();
         assert_eq!(e1_tasks.len(), 1);
         assert_eq!(e1_tasks[0].title, "Task A");
 
-        let e2_tasks = list_tasks(&db, Some(&e2.id), None).unwrap();
+        let e2_tasks = list_tasks(&db, Some(&e2.id), None, None).unwrap();
         assert_eq!(e2_tasks.len(), 1);
         assert_eq!(e2_tasks[0].title, "Task B");
     }
@@ -377,6 +396,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -387,6 +407,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Task B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -401,11 +422,11 @@ mod tests {
         )
         .unwrap();
 
-        let in_progress = list_tasks(&db, None, Some(ItemStatus::InProgress)).unwrap();
+        let in_progress = list_tasks(&db, None, None, Some(ItemStatus::InProgress)).unwrap();
         assert_eq!(in_progress.len(), 1);
         assert_eq!(in_progress[0].title, "Task A");
 
-        let todo = list_tasks(&db, None, Some(ItemStatus::Todo)).unwrap();
+        let todo = list_tasks(&db, None, None, Some(ItemStatus::Todo)).unwrap();
         assert_eq!(todo.len(), 1);
         assert_eq!(todo[0].title, "Task B");
     }
@@ -423,12 +444,13 @@ mod tests {
                     epic_id: epic.id.clone(),
                     title: format!("Task {i}"),
                     description: String::new(),
+                    session_id: None,
                 },
             )
             .unwrap();
         }
 
-        let all = list_tasks(&db, None, None).unwrap();
+        let all = list_tasks(&db, None, None, None).unwrap();
         assert_eq!(all.len(), 3);
     }
 
@@ -444,6 +466,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Original".to_string(),
                 description: "original desc".to_string(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -493,6 +516,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Blocker Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -543,6 +567,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Lifecycle".to_string(),
                 description: "testing".to_string(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -584,6 +609,7 @@ mod tests {
                     epic_id: epic.id.clone(),
                     title: title.to_string(),
                     description: String::new(),
+                    session_id: None,
                 },
             )
             .unwrap()
@@ -618,6 +644,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Test Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -664,6 +691,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Test Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -685,6 +713,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task 1".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -694,6 +723,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task 2".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -781,6 +811,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "New Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -803,6 +834,7 @@ mod tests {
                     epic_id: epic_id.to_string(),
                     title: title.to_string(),
                     description: String::new(),
+                    session_id: None,
                 },
             )
             .unwrap()

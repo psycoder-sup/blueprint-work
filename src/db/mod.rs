@@ -6,6 +6,7 @@ use rusqlite::Connection;
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../../migrations/001_init.sql")),
     (2, include_str!("../../migrations/002_short_ids.sql")),
+    (3, include_str!("../../migrations/003_session_id.sql")),
 ];
 
 pub struct Database {
@@ -206,7 +207,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]

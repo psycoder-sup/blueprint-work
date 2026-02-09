@@ -378,6 +378,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "T1".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -387,6 +388,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "T2".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -396,6 +398,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "T3".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -451,6 +454,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -460,6 +464,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocked".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -516,6 +521,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -525,6 +531,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocked Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -573,6 +580,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -582,6 +590,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocked Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -663,6 +672,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -672,6 +682,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocked".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();

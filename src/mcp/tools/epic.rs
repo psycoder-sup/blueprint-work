@@ -82,7 +82,7 @@ pub(super) fn handle_get_epic(args: &Value, db: &Database, default_project_id: O
         }
     };
 
-    let tasks = match task_db::list_tasks(db, Some(&id), None) {
+    let tasks = match task_db::list_tasks(db, Some(&id), None, None) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("list_tasks error: {e:#}");
@@ -404,6 +404,7 @@ mod tests {
                 epic_id: epic_id.to_string(),
                 title: "Child Task".to_string(),
                 description: "task desc".to_string(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -550,6 +551,7 @@ mod tests {
                 epic_id: epic_id.to_string(),
                 title: "Child Task".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -558,7 +560,7 @@ mod tests {
         dispatch_tool("delete_epic", &json!({"id": epic_id}), &db, None).unwrap();
 
         // Verify tasks are gone
-        let tasks = task_db::list_tasks(&db, Some(epic_id), None).unwrap();
+        let tasks = task_db::list_tasks(&db, Some(epic_id), None, None).unwrap();
         assert!(tasks.is_empty(), "tasks should be cascade-deleted");
     }
 

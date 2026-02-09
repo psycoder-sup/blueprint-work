@@ -317,7 +317,7 @@ impl App {
     pub fn refresh_tasks(&mut self) {
         self.tasks = self
             .selected_epic()
-            .and_then(|e| list_tasks(&self.db, Some(&e.id), None).ok())
+            .and_then(|e| list_tasks(&self.db, Some(&e.id), None, None).ok())
             .unwrap_or_default();
         self.selected_task_idx = self.selected_task_idx.min(self.tasks.len().saturating_sub(1));
 
@@ -1127,6 +1127,7 @@ mod tests {
                 epic_id: epic_a.id.clone(),
                 title: "Task A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1136,6 +1137,7 @@ mod tests {
                 epic_id: epic_b.id.clone(),
                 title: "Task B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1226,6 +1228,7 @@ mod tests {
                     epic_id: epic.id.clone(),
                     title: format!("Task {i}"),
                     description: String::new(),
+                    session_id: None,
                 },
             )
             .unwrap();
@@ -1393,6 +1396,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1402,6 +1406,7 @@ mod tests {
                 epic_id: epic.id,
                 title: "Blocked".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1469,6 +1474,7 @@ mod tests {
                 epic_id: epic1.id.clone(),
                 title: "Task todo".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1478,6 +1484,7 @@ mod tests {
                 epic_id: epic1.id.clone(),
                 title: "Task in_progress".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1487,6 +1494,7 @@ mod tests {
                 epic_id: epic1.id.clone(),
                 title: "Task done".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1553,6 +1561,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocker".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1562,6 +1571,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Blocked".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1609,6 +1619,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task 1".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1868,6 +1879,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1877,6 +1889,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -1886,6 +1899,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task C".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -2463,6 +2477,7 @@ mod tests {
                 epic_id: epic_a.id.clone(),
                 title: "Task in A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -2472,6 +2487,7 @@ mod tests {
                 epic_id: epic_b.id.clone(),
                 title: "Task in B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();

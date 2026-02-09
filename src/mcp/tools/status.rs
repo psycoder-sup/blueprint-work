@@ -223,6 +223,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task A".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -232,6 +233,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task B".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();
@@ -241,6 +243,7 @@ mod tests {
                 epic_id: epic.id.clone(),
                 title: "Task C".to_string(),
                 description: String::new(),
+                session_id: None,
             },
         )
         .unwrap();

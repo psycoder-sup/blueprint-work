@@ -159,15 +159,17 @@ pub fn tool_definitions() -> Vec<Value> {
             json!({
                 "epic_id": { "type": "string", "description": "Parent epic ID (ULID or short ID like E1)" },
                 "title": { "type": "string", "description": "Task title" },
-                "description": { "type": "string", "description": "Task description" }
+                "description": { "type": "string", "description": "Task description" },
+                "session_id": { "type": "string", "description": "Optional session ID to track which session is working on this task" }
             }),
             &["epic_id", "title", "description"],
         ),
         tool(
             "list_tasks",
-            "List tasks, optionally filtered by epic or status",
+            "List tasks, optionally filtered by epic or status. If project_id is omitted, the default from .blueprint/setting.json is used when configured.",
             json!({
                 "epic_id": { "type": "string", "description": "Filter by epic ID (ULID or short ID like E1)" },
+                "project_id": { "type": "string", "description": "Filter by project ID (optional, defaults to .blueprint/setting.json when configured)" },
                 "status": {
                     "type": "string",
                     "enum": ["todo", "in_progress", "done"],
@@ -195,7 +197,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     "type": "string",
                     "enum": ["todo", "in_progress", "done"],
                     "description": "New status"
-                }
+                },
+                "session_id": { "type": "string", "description": "Session ID to track which session is working on this task. Pass empty string to clear." }
             }),
             &["id"],
         ),
