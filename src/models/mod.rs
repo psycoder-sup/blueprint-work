@@ -1,5 +1,6 @@
 pub mod dependency;
 pub mod epic;
+pub mod json_schema;
 pub mod prd;
 pub mod project;
 pub mod task;
