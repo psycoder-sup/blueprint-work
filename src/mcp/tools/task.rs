@@ -4,11 +4,20 @@ use crate::db::dependency as dep_db;
 use crate::db::epic as epic_db;
 use crate::db::task as task_db;
 use crate::db::Database;
-use crate::models::dependency::DependencyType;
+use crate::models::dependency::{Dependency, DependencyType};
 use crate::models::epic::ItemStatus;
-use crate::models::task::{CreateTaskInput, UpdateTaskInput};
+use crate::models::task::{CreateTaskInput, TaskSummary, UpdateTaskInput};
 
 use super::{optional_str, parse_optional_status, require_str, resolve_optional_project_id, tool_error, tool_result};
+
+/// Return the short ID of a blocker task if available, otherwise its ULID.
+fn blocker_label(db: &Database, dep: Dependency) -> String {
+    task_db::get_task(db, &dep.blocker_id)
+        .ok()
+        .flatten()
+        .and_then(|t| t.short_id)
+        .unwrap_or(dep.blocker_id)
+}
 
 pub(super) fn handle_create_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
     let epic_id = match require_str(args, "epic_id") {
@@ -63,13 +72,30 @@ pub(super) fn handle_list_tasks(args: &Value, db: &Database, default_project_id:
         Err(e) => return e,
     };
 
-    match task_db::list_tasks(db, epic_id.as_deref(), project_id.as_deref(), status) {
-        Ok(tasks) => tool_result(&tasks),
+    let tasks = match task_db::list_tasks(db, epic_id.as_deref(), project_id.as_deref(), status) {
+        Ok(t) => t,
         Err(e) => {
             eprintln!("list_tasks error: {e:#}");
-            tool_error("Failed to list tasks")
+            return tool_error("Failed to list tasks");
         }
-    }
+    };
+
+    let summaries: Vec<TaskSummary> = tasks
+        .into_iter()
+        .map(|task| {
+            let blockers = dep_db::get_blockers(db, &DependencyType::Task, &task.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|dep| blocker_label(db, dep))
+                .collect();
+            TaskSummary::from_task(task, blockers)
+        })
+        .collect();
+
+    tool_result(&json!({
+        "tasks": summaries,
+        "_hint": "Use get_task to view full task details including description."
+    }))
 }
 
 pub(super) fn handle_get_task(args: &Value, db: &Database, default_project_id: Option<&str>) -> Value {
@@ -308,8 +334,9 @@ mod tests {
         let (db, _dir) = test_db();
         let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
         assert!(result.get("isError").is_none());
-        let tasks = parse_response(&result);
-        assert!(tasks.as_array().unwrap().is_empty());
+        let parsed = parse_response(&result);
+        assert!(parsed["tasks"].as_array().unwrap().is_empty());
+        assert!(parsed["_hint"].as_str().unwrap().contains("get_task"));
     }
 
     #[test]
@@ -331,8 +358,10 @@ mod tests {
         );
 
         let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 2);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks[0].get("description").is_none());
     }
 
     #[test]
@@ -355,8 +384,9 @@ mod tests {
         );
 
         let result = dispatch_tool("list_tasks", &json!({"epic_id": e1}), &db, None).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "T1");
     }
 
@@ -391,8 +421,9 @@ mod tests {
         );
 
         let result = dispatch_tool("list_tasks", &json!({"status": "in_progress"}), &db, None).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "T1");
     }
 
@@ -664,8 +695,9 @@ mod tests {
         .unwrap();
 
         assert!(result.get("isError").is_none());
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "T1");
     }
 
@@ -755,8 +787,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let tasks = parse_response(&list_result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let list_parsed = parse_response(&list_result);
+        assert_eq!(list_parsed["tasks"].as_array().unwrap().len(), 1);
 
         // Update
         let update_result = dispatch_tool(
@@ -827,14 +859,16 @@ mod tests {
 
         // With default_project_id set to A, list_tasks (no args) returns only A's tasks
         let result = dispatch_tool("list_tasks", &json!({}), &db, Some(&pid_a)).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "Task A");
 
         // With default_project_id set to B, returns only B's tasks
         let result = dispatch_tool("list_tasks", &json!({}), &db, Some(&pid_b)).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "Task B");
     }
 
@@ -851,8 +885,9 @@ mod tests {
             Some(&pid_a),
         )
         .unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "Task B");
     }
 
@@ -863,7 +898,61 @@ mod tests {
 
         // No default project, no args - returns all tasks
         let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
-        let tasks = parse_response(&result);
-        assert_eq!(tasks.as_array().unwrap().len(), 2);
+        let parsed = parse_response(&result);
+        assert_eq!(parsed["tasks"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_list_tasks_includes_blockers() {
+        let (db, _dir) = test_db();
+        let project_id = create_test_project(&db);
+        let epic_id = create_test_epic(&db, &project_id);
+
+        let r1 = dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "Blocker Task", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+        let t1 = parse_response(&r1);
+        let t1_id = t1["id"].as_str().unwrap();
+        let t1_short = t1["short_id"].as_str().unwrap();
+
+        let r2 = dispatch_tool(
+            "create_task",
+            &json!({"epic_id": epic_id, "title": "Blocked Task", "description": "d"}),
+            &db,
+            None,
+        )
+        .unwrap();
+        let t2 = parse_response(&r2);
+        let t2_id = t2["id"].as_str().unwrap();
+
+        // Add dependency: t1 blocks t2
+        dep_db::add_dependency(
+            &db,
+            AddDependencyInput {
+                blocker_type: DependencyType::Task,
+                blocker_id: t1_id.to_string(),
+                blocked_type: DependencyType::Task,
+                blocked_id: t2_id.to_string(),
+            },
+        )
+        .unwrap();
+
+        let result = dispatch_tool("list_tasks", &json!({}), &db, None).unwrap();
+        let parsed = parse_response(&result);
+        let tasks = parsed["tasks"].as_array().unwrap();
+
+        // Find the blocked task in the list
+        let blocked = tasks.iter().find(|t| t["id"] == t2_id).unwrap();
+        let blockers = blocked["blockers"].as_array().unwrap();
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].as_str().unwrap(), t1_short);
+
+        // Blocker task should have empty blockers
+        let blocker = tasks.iter().find(|t| t["id"] == t1_id).unwrap();
+        assert!(blocker["blockers"].as_array().unwrap().is_empty());
     }
 }

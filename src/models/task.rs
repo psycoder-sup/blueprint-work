@@ -2,6 +2,29 @@ use serde::{Deserialize, Serialize};
 
 use super::ItemStatus;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskSummary {
+    pub id: String,
+    pub short_id: Option<String>,
+    pub epic_id: String,
+    pub title: String,
+    pub status: ItemStatus,
+    pub blockers: Vec<String>,
+}
+
+impl TaskSummary {
+    pub fn from_task(task: BlueTask, blockers: Vec<String>) -> Self {
+        Self {
+            id: task.id,
+            short_id: task.short_id,
+            epic_id: task.epic_id,
+            title: task.title,
+            status: task.status,
+            blockers,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlueTask {
     pub id: String,

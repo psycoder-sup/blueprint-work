@@ -166,7 +166,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "list_tasks",
-            "List tasks, optionally filtered by epic or status. If project_id is omitted, the default from .blueprint/setting.json is used when configured.",
+            "List tasks, optionally filtered by epic or status. Returns summaries only — use get_task for full details. If project_id is omitted, the default from .blueprint/setting.json is used when configured.",
             json!({
                 "epic_id": { "type": "string", "description": "Filter by epic ID (ULID or short ID like E1)" },
                 "project_id": { "type": "string", "description": "Filter by project ID (optional, defaults to .blueprint/setting.json when configured)" },
